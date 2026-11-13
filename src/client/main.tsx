@@ -4,6 +4,7 @@ import {
   Tldraw,
   Editor,
   createShapeId,
+  createBindingId,
   toRichText,
   type TLShapeId,
 } from 'tldraw'
@@ -12,7 +13,15 @@ import type {
   CanvasActionCommand,
   CanvasShapeSummary,
 } from '../design/router'
-import { DESIGN_THEMES, SHAPE_ARCHETYPES, type DesignThemeSpec } from '../design/catalog'
+import {
+  DESIGN_THEMES,
+  SHAPE_ARCHETYPES,
+  type DesignThemeSpec,
+  type TldrawColor,
+  type TldrawDash,
+  type TldrawFont,
+  type TldrawSize,
+} from '../design/catalog'
 
 const EARLYBIRD_WORKLET = `
 class EarlybirdCaptureProcessor extends AudioWorkletProcessor {
@@ -45,6 +54,34 @@ class EarlybirdCaptureProcessor extends AudioWorkletProcessor {
 registerProcessor('earlybird-cap', EarlybirdCaptureProcessor);
 `
 
+const AMBIENT_SUGGESTIONS = [
+  '“generate a system architecture diagram”',
+  '“switch to cyberpunk neon aesthetic”',
+  '“draw a cloud called CDN and connect it to Stream Gateway”',
+  '“generate a multimodal rag pipeline”',
+  '“apply warm editorial paper style”',
+  '“arrange all shapes in a circle”',
+  '“frame all shapes as Core Platform”',
+  '“swap Earlybird and Zero-UI Canvas”',
+  '“harmonize the visual design”',
+]
+
+const COLOR_HEX_MAP: Record<string, string> = {
+  black: '#1e293b',
+  grey: '#64748b',
+  'light-violet': '#c084fc',
+  violet: '#8b5cf6',
+  blue: '#3b82f6',
+  'light-blue': '#38bdf8',
+  yellow: '#facc15',
+  orange: '#f97316',
+  green: '#22c55e',
+  'light-green': '#4ade80',
+  'light-red': '#fb7185',
+  red: '#ef4444',
+  white: '#f8fafc',
+}
+
 declare global {
   interface Window {
     __tldrawEditor?: Editor
@@ -67,11 +104,12 @@ function extractLabelFromShape(editor: Editor, shape: any): string {
   return ''
 }
 
-function summarizeCanvasShapes(editor: Editor): CanvasShapeSummary[] {
+function summarizeCanvasShapes(editor: Editor, ghostId?: TLShapeId | null): CanvasShapeSummary[] {
   const shapes = editor.getCurrentPageShapes()
   const out: CanvasShapeSummary[] = []
   for (const s of shapes as any[]) {
-    if (s.type === 'arrow') continue
+    if (s.type === 'arrow' || s.type === 'frame') continue
+    if (ghostId && s.id === ghostId) continue
     const bounds = editor.getShapePageBounds(s.id)
     const label = extractLabelFromShape(editor, s)
     out.push({
@@ -89,9 +127,168 @@ function summarizeCanvasShapes(editor: Editor): CanvasShapeSummary[] {
   return out
 }
 
+/**
+ * Renders a real 448x280 RGB PNG snapshot of the current canvas state for
+ * EmbeddingGemma 2's Vision+Text multimodal encoder.
+ */
+function renderCanvasSnapshotBase64(shapes: CanvasShapeSummary[], bgHex: string): string {
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = 448
+    canvas.height = 280
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return ''
+
+    ctx.fillStyle = bgHex || '#08101d'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    if (shapes.length > 0) {
+      const xs = shapes.map((s) => s.x)
+      const ys = shapes.map((s) => s.y)
+      const maxXs = shapes.map((s) => s.x + s.w)
+      const maxYs = shapes.map((s) => s.y + s.h)
+      const minX = Math.min(...xs)
+      const minY = Math.min(...ys)
+      const spanX = Math.max(200, Math.max(...maxXs) - minX)
+      const spanY = Math.max(140, Math.max(...maxYs) - minY)
+
+      for (const s of shapes) {
+        const sx = 28 + ((s.x - minX) / spanX) * 392
+        const sy = 28 + ((s.y - minY) / spanY) * 224
+        const sw = Math.max(36, (s.w / spanX) * 392)
+        const sh = Math.max(24, (s.h / spanY) * 224)
+        const strokeHex = COLOR_HEX_MAP[s.color ?? 'light-blue'] ?? '#38bdf8'
+
+        ctx.fillStyle = strokeHex + '28'
+        ctx.strokeStyle = strokeHex
+        ctx.lineWidth = 2.5
+        ctx.beginPath()
+        ctx.roundRect(sx, sy, sw, sh, 8)
+        ctx.fill()
+        ctx.stroke()
+
+        ctx.fillStyle = '#f8fafc'
+        ctx.font = '11px Inter, sans-serif'
+        ctx.fillText((s.label || '').slice(0, 18), sx + 8, sy + sh / 2 + 4)
+      }
+    }
+
+    return canvas.toDataURL('image/png')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Creates a tldraw v5 arrow with native TLArrowBindings on both start and end shapes
+ * so arrows attach cleanly to shape perimeters and follow shapes when moved or aligned.
+ */
+function createBoundArrow(
+  editor: Editor,
+  fromShape: { id: string; x: number; y: number; w: number; h: number },
+  toShape: { id: string; x: number; y: number; w: number; h: number },
+  opts: {
+    label?: string
+    bend?: number
+    color: TldrawColor
+    dash: TldrawDash
+    size: TldrawSize
+    font: TldrawFont
+  }
+) {
+  const arrowId = createShapeId()
+  const startX = fromShape.x + fromShape.w / 2
+  const startY = fromShape.y + fromShape.h / 2
+  const endX = toShape.x + toShape.w / 2
+  const endY = toShape.y + toShape.h / 2
+
+  editor.createShape({
+    id: arrowId,
+    type: 'arrow',
+    x: 0,
+    y: 0,
+    props: {
+      start: { x: startX, y: startY },
+      end: { x: endX, y: endY },
+      bend: opts.bend ?? 0,
+      color: opts.color,
+      dash: opts.dash,
+      size: opts.size,
+      font: opts.font,
+      richText: toRichText(opts.label ?? ''),
+    },
+  } as any)
+
+  try {
+    editor.createBinding({
+      id: createBindingId(),
+      type: 'arrow',
+      fromId: arrowId,
+      toId: fromShape.id as TLShapeId,
+      props: {
+        terminal: 'start',
+        normalizedAnchor: { x: 0.5, y: 0.5 },
+        isExact: false,
+        isPrecise: false,
+        snap: 'none',
+      },
+    } as any)
+
+    editor.createBinding({
+      id: createBindingId(),
+      type: 'arrow',
+      fromId: arrowId,
+      toId: toShape.id as TLShapeId,
+      props: {
+        terminal: 'end',
+        normalizedAnchor: { x: 0.5, y: 0.5 },
+        isExact: false,
+        isPrecise: false,
+        snap: 'none',
+      },
+    } as any)
+  } catch {
+    // fallback to unbound coordinates if binding fails
+  }
+}
+
+/**
+ * Finds a clean, non-overlapping coordinate near (targetX, targetY) so new shapes
+ * never pile directly on top of existing nodes.
+ */
+function findOpenCanvasSpot(
+  existing: CanvasShapeSummary[],
+  targetX: number,
+  targetY: number,
+  w: number,
+  h: number
+): { x: number; y: number } {
+  const overlaps = (x: number, y: number) =>
+    existing.some(
+      (s) =>
+        Math.abs(x + w / 2 - (s.x + s.w / 2)) < (w + s.w) * 0.48 &&
+        Math.abs(y + h / 2 - (s.y + s.h / 2)) < (h + s.h) * 0.48
+    )
+
+  if (!overlaps(targetX, targetY)) return { x: targetX, y: targetY }
+
+  for (let ring = 1; ring <= 8; ring++) {
+    const stepRadius = ring * 135
+    for (let k = 0; k < 8; k++) {
+      const angle = (k * Math.PI) / 4 + ring * 0.35
+      const cx = Math.round(targetX + Math.cos(angle) * stepRadius)
+      const cy = Math.round(targetY + Math.sin(angle) * stepRadius)
+      if (!overlaps(cx, cy)) return { x: cx, y: cy }
+    }
+  }
+  return { x: targetX + 60, y: targetY + 60 }
+}
+
 function App() {
   const editorRef = useRef<Editor | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const ghostShapeIdRef = useRef<TLShapeId | null>(null)
+
   const [activeTheme, setActiveTheme] = useState<DesignThemeSpec>(DESIGN_THEMES[0]!)
   const [micState, setMicState] = useState<'listening' | 'connecting' | 'air-keyboard'>('connecting')
   const [micLevel, setMicLevel] = useState<number>(0)
@@ -107,9 +304,106 @@ function App() {
   } | null>(null)
   const [mlReady, setMlReady] = useState<boolean>(false)
   const [airTypingBuffer, setAirTypingBuffer] = useState<string>('')
+  const [suggestionIdx, setSuggestionIdx] = useState<number>(0)
 
   const activeThemeRef = useRef<DesignThemeSpec>(activeTheme)
   activeThemeRef.current = activeTheme
+
+  // Rotate idle voice command examples every 6.5s
+  useEffect(() => {
+    const id = setInterval(() => {
+      setSuggestionIdx((i) => (i + 1) % AMBIENT_SUGGESTIONS.length)
+    }, 6500)
+    return () => clearInterval(id)
+  }, [])
+
+  const clearSpeculativeGhostShape = useCallback(() => {
+    const editor = editorRef.current
+    const gid = ghostShapeIdRef.current
+    if (editor && gid) {
+      try {
+        if (editor.getShape(gid)) {
+          editor.deleteShapes([gid])
+        }
+      } catch {}
+      ghostShapeIdRef.current = null
+    }
+  }, [])
+
+  /**
+   * Renders a real-time translucent ghost shape on the tldraw canvas while the user
+   * is mid-utterance!
+   */
+  const syncSpeculativeGhostShape = useCallback(
+    (specCmd?: CanvasActionCommand) => {
+      const editor = editorRef.current
+      if (!editor || !specCmd) {
+        clearSpeculativeGhostShape()
+        return
+      }
+      if (
+        specCmd.intent !== 'create_shape' &&
+        specCmd.intent !== 'create_note' &&
+        specCmd.intent !== 'create_text'
+      ) {
+        clearSpeculativeGhostShape()
+        return
+      }
+      if (!specCmd.shape) return
+
+      const theme = activeThemeRef.current
+      const viewport = editor.getViewportPageBounds()
+      const cx = viewport.x + viewport.w / 2
+      const cy = viewport.y + viewport.h / 2
+      const { archetype, label, color } = specCmd.shape
+
+      let gid = ghostShapeIdRef.current
+      if (!gid || !editor.getShape(gid)) {
+        gid = createShapeId('earlybird_ghost')
+        ghostShapeIdRef.current = gid
+        const spot = findOpenCanvasSpot(
+          summarizeCanvasShapes(editor, gid),
+          cx - archetype.width / 2,
+          cy - archetype.height / 2,
+          archetype.width,
+          archetype.height
+        )
+        editor.createShape({
+          id: gid,
+          type: 'geo',
+          x: spot.x,
+          y: spot.y,
+          opacity: 0.36,
+          props: {
+            geo: archetype.geo ?? 'rectangle',
+            w: archetype.width,
+            h: archetype.height,
+            color: color ?? theme.primaryColor,
+            fill: 'semi',
+            dash: 'dashed',
+            size: theme.size,
+            font: theme.font,
+            richText: toRichText(`${label} …`),
+          },
+        } as any)
+      } else {
+        editor.updateShape({
+          id: gid,
+          type: 'geo',
+          opacity: 0.36,
+          props: {
+            geo: archetype.geo ?? 'rectangle',
+            w: archetype.width,
+            h: archetype.height,
+            color: color ?? theme.primaryColor,
+            dash: 'dashed',
+            richText: toRichText(`${label} …`),
+          },
+        } as any)
+      }
+    },
+    [clearSpeculativeGhostShape]
+  )
 
   const applyThemeToCanvas = useCallback((editor: Editor, theme: DesignThemeSpec) => {
     setActiveTheme(theme)
@@ -118,14 +412,12 @@ function App() {
       editor.user.updateUserPreferences({
         colorScheme: theme.isDark ? 'dark' : 'light',
       })
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     const shapes = editor.getCurrentPageShapes() as any[]
     if (!shapes.length) return
 
-    const palette: DesignThemeSpec['primaryColor'][] = [
+    const palette: TldrawColor[] = [
       theme.primaryColor,
       theme.secondaryColor,
       theme.accentColor,
@@ -186,7 +478,7 @@ function App() {
     })
   }, [])
 
-  const executeCanvasCommand = useCallback(
+  const executeAtomicCommand = useCallback(
     async (cmd: CanvasActionCommand) => {
       const editor = editorRef.current
       if (!editor) return
@@ -205,13 +497,23 @@ function App() {
         if (cmd.historyOp === 'redo') editor.redo()
         else editor.undo()
       } else if (cmd.intent === 'camera_control') {
+        const cam = editor.getCamera()
         if (cmd.cameraOp === 'zoom_in') editor.zoomIn(undefined, { animation: { duration: 220 } })
         else if (cmd.cameraOp === 'zoom_out') editor.zoomOut(undefined, { animation: { duration: 220 } })
+        else if (cmd.cameraOp === 'pan_left')
+          editor.setCamera({ x: cam.x + 280, y: cam.y, z: cam.z }, { animation: { duration: 220 } })
+        else if (cmd.cameraOp === 'pan_right')
+          editor.setCamera({ x: cam.x - 280, y: cam.y, z: cam.z }, { animation: { duration: 220 } })
+        else if (cmd.cameraOp === 'pan_up')
+          editor.setCamera({ x: cam.x, y: cam.y + 220, z: cam.z }, { animation: { duration: 220 } })
+        else if (cmd.cameraOp === 'pan_down')
+          editor.setCamera({ x: cam.x, y: cam.y - 220, z: cam.z }, { animation: { duration: 220 } })
         else editor.zoomToFit({ animation: { duration: 280 } })
       } else if (cmd.intent === 'apply_theme' && cmd.theme) {
         applyThemeToCanvas(editor, cmd.theme)
       } else if (cmd.intent === 'vision_harmonize') {
-        const shapes = summarizeCanvasShapes(editor)
+        const shapes = summarizeCanvasShapes(editor, ghostShapeIdRef.current)
+        const imageBase64 = renderCanvasSnapshotBase64(shapes, theme.canvasBg)
         const res = await fetch('/api/voice/harmonize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -219,6 +521,7 @@ function App() {
             canvasShapes: shapes,
             canvasBg: theme.canvasBg,
             goalPrompt: cmd.utterance,
+            imageBase64,
           }),
         })
         if (res.ok) {
@@ -227,8 +530,9 @@ function App() {
             applyThemeToCanvas(editor, data.theme)
           }
           if (data.harmony?.critiqueId === 'dense-cluster') {
-            // Also organize shapes into a balanced grid
-            const nonArrows = (editor.getCurrentPageShapes() as any[]).filter((s) => s.type !== 'arrow' && s.type !== 'frame')
+            const nonArrows = (editor.getCurrentPageShapes() as any[]).filter(
+              (s) => s.type !== 'arrow' && s.type !== 'frame'
+            )
             const cols = Math.max(2, Math.ceil(Math.sqrt(nonArrows.length)))
             nonArrows.forEach((s, i) => {
               const r = Math.floor(i / cols)
@@ -256,30 +560,18 @@ function App() {
         cmd.shape
       ) {
         const { archetype, label, color, fill, dash, font, size, positionHint } = cmd.shape
-        const existingCount = editor.getCurrentPageShapes().length
-        const goldenAngle = existingCount * 2.39996
-        const radius = existingCount === 0 ? 0 : Math.min(260, 95 + existingCount * 28)
-        let x = cx + Math.cos(goldenAngle) * radius - archetype.width / 2
-        let y = cy + Math.sin(goldenAngle) * radius - archetype.height / 2
+        const existing = summarizeCanvasShapes(editor, ghostShapeIdRef.current)
+        let targetX = cx - archetype.width / 2
+        let targetY = cy - archetype.height / 2
 
-        if (positionHint === 'center') {
-          x = cx - archetype.width / 2
-          y = cy - archetype.height / 2
-        } else if (positionHint === 'left') {
-          x = cx - 340 - archetype.width / 2
-          y = cy - archetype.height / 2
-        } else if (positionHint === 'right') {
-          x = cx + 340 - archetype.width / 2
-          y = cy - archetype.height / 2
-        } else if (positionHint === 'top') {
-          x = cx - archetype.width / 2
-          y = cy - 220 - archetype.height / 2
-        } else if (positionHint === 'bottom') {
-          x = cx - archetype.width / 2
-          y = cy + 220 - archetype.height / 2
-        }
+        if (positionHint === 'left') targetX = cx - 340 - archetype.width / 2
+        else if (positionHint === 'right') targetX = cx + 340 - archetype.width / 2
+        else if (positionHint === 'top') targetY = cy - 220 - archetype.height / 2
+        else if (positionHint === 'bottom') targetY = cy + 220 - archetype.height / 2
 
+        const { x, y } = findOpenCanvasSpot(existing, targetX, targetY, archetype.width, archetype.height)
         const id = createShapeId()
+
         if (cmd.intent === 'create_note' || archetype.kind === 'note') {
           editor.createShape({
             id,
@@ -327,20 +619,22 @@ function App() {
           } as any)
         }
       } else if (cmd.intent === 'connect_shapes' && cmd.connection) {
-        const shapes = summarizeCanvasShapes(editor)
-        let fromShape = shapes.find((s) => s.id === cmd.connection?.fromShapeId)
-        let toShape = shapes.find((s) => s.id === cmd.connection?.toShapeId)
+        const shapes = summarizeCanvasShapes(editor, ghostShapeIdRef.current)
+        let fromShape =
+          shapes.find((s) => s.id === cmd.connection?.fromShapeId) ??
+          shapes.find((s) => s.label.toLowerCase() === cmd.connection?.fromLabel?.toLowerCase())
+        let toShape =
+          shapes.find((s) => s.id === cmd.connection?.toShapeId) ??
+          shapes.find((s) => s.label.toLowerCase() === cmd.connection?.toLabel?.toLowerCase())
 
-        // If either shape doesn't exist yet on the canvas, create it automatically!
         if (!fromShape) {
           const newFromId = createShapeId()
-          const fx = cx - 260
-          const fy = cy - 55
+          const spot = findOpenCanvasSpot(shapes, cx - 260, cy - 55, 210, 110)
           editor.createShape({
             id: newFromId,
             type: 'geo',
-            x: fx,
-            y: fy,
+            x: spot.x,
+            y: spot.y,
             props: {
               geo: 'rectangle',
               w: 210,
@@ -357,8 +651,8 @@ function App() {
             id: newFromId,
             type: 'geo',
             label: cmd.connection.fromLabel ?? cmd.connection.fromQuery,
-            x: fx,
-            y: fy,
+            x: spot.x,
+            y: spot.y,
             w: 210,
             h: 110,
           }
@@ -366,13 +660,12 @@ function App() {
 
         if (!toShape || toShape.id === fromShape.id) {
           const newToId = createShapeId()
-          const tx = fromShape.x + 360
-          const ty = fromShape.y
+          const spot = findOpenCanvasSpot([...shapes, fromShape], fromShape.x + 340, fromShape.y, 210, 110)
           editor.createShape({
             id: newToId,
             type: 'geo',
-            x: tx,
-            y: ty,
+            x: spot.x,
+            y: spot.y,
             props: {
               geo: 'rectangle',
               w: 210,
@@ -389,33 +682,20 @@ function App() {
             id: newToId,
             type: 'geo',
             label: cmd.connection.toLabel ?? cmd.connection.toQuery,
-            x: tx,
-            y: ty,
+            x: spot.x,
+            y: spot.y,
             w: 210,
             h: 110,
           }
         }
 
-        const startX = fromShape.x + fromShape.w / 2
-        const startY = fromShape.y + fromShape.h / 2
-        const endX = toShape.x + toShape.w / 2
-        const endY = toShape.y + toShape.h / 2
-
-        editor.createShape({
-          id: createShapeId(),
-          type: 'arrow',
-          x: 0,
-          y: 0,
-          props: {
-            start: { x: startX, y: startY },
-            end: { x: endX, y: endY },
-            color: theme.accentColor,
-            dash: theme.dash,
-            size: theme.size,
-            font: theme.font,
-            richText: toRichText(cmd.connection.edgeLabel ?? ''),
-          },
-        } as any)
+        createBoundArrow(editor, fromShape, toShape, {
+          label: cmd.connection.edgeLabel,
+          color: theme.accentColor,
+          dash: theme.dash,
+          size: theme.size,
+          font: theme.font,
+        })
       } else if (cmd.intent === 'generate_layout' && cmd.layout) {
         const { template, topicTitle } = cmd.layout
         const roleColors = {
@@ -428,15 +708,14 @@ function App() {
         const nodePositions = new Map<string, { id: TLShapeId; x: number; y: number; w: number; h: number }>()
 
         editor.run(() => {
-          // Create a heading title above the generated layout
           const headerText = topicTitle
             ? `${template.name}: ${topicTitle}`
             : template.frameLabel ?? template.name
           editor.createShape({
             id: createShapeId(),
             type: 'text',
-            x: cx - 220,
-            y: cy - 310,
+            x: cx - 240,
+            y: cy - 320,
             props: {
               color: theme.primaryColor,
               size: 'xl',
@@ -498,25 +777,129 @@ function App() {
             const src = nodePositions.get(edge.from)
             const dst = nodePositions.get(edge.to)
             if (!src || !dst) continue
-            editor.createShape({
-              id: createShapeId(),
-              type: 'arrow',
-              x: 0,
-              y: 0,
-              props: {
-                start: { x: src.x + src.w / 2, y: src.y + src.h / 2 },
-                end: { x: dst.x + dst.w / 2, y: dst.y + dst.h / 2 },
-                color: theme.secondaryColor,
-                dash: theme.dash,
-                size: theme.size,
-                font: theme.font,
-                richText: toRichText(edge.label ?? ''),
-              },
-            } as any)
+            createBoundArrow(editor, src, dst, {
+              label: edge.label,
+              bend: edge.bend,
+              color: theme.secondaryColor,
+              dash: theme.dash,
+              size: theme.size,
+              font: theme.font,
+            })
           }
         })
 
         editor.zoomToFit({ animation: { duration: 320 } })
+      } else if (cmd.intent === 'rename_target' && cmd.targetOp?.newLabel) {
+        const allShapes = (editor.getCurrentPageShapes() as any[]).filter((s) => s.type !== 'arrow')
+        const target =
+          allShapes.find((s) => s.id === cmd.targetOp?.targetShapeId) ?? allShapes[allShapes.length - 1]
+        if (target) {
+          if (target.type === 'frame') {
+            editor.updateShape({
+              id: target.id,
+              type: 'frame',
+              props: { name: cmd.targetOp.newLabel },
+            } as any)
+          } else {
+            editor.updateShape({
+              id: target.id,
+              type: target.type,
+              props: { richText: toRichText(cmd.targetOp.newLabel) },
+            } as any)
+          }
+        }
+      } else if (cmd.intent === 'duplicate_target' && cmd.targetOp) {
+        const allShapes = (editor.getCurrentPageShapes() as any[]).filter((s) => s.type !== 'arrow')
+        const target =
+          allShapes.find((s) => s.id === cmd.targetOp?.targetShapeId) ?? allShapes[allShapes.length - 1]
+        if (target) {
+          editor.duplicateShapes([target.id], { x: 55, y: 55 })
+        }
+      } else if (cmd.intent === 'highlight_target' && cmd.targetOp) {
+        const allShapes = (editor.getCurrentPageShapes() as any[]).filter((s) => s.type !== 'arrow')
+        const target =
+          allShapes.find((s) => s.id === cmd.targetOp?.targetShapeId) ?? allShapes[allShapes.length - 1]
+        if (target) {
+          const b = editor.getShapePageBounds(target.id)
+          if (b) {
+            editor.zoomToBounds(b, {
+              targetZoom: 1.1,
+              inset: 140,
+              animation: { duration: 360 },
+            })
+          }
+        }
+      } else if (cmd.intent === 'swap_positions' && cmd.targetOp) {
+        const allShapes = (editor.getCurrentPageShapes() as any[]).filter((s) => s.type !== 'arrow')
+        const s1 = allShapes.find((s) => s.id === cmd.targetOp?.targetShapeId) ?? allShapes[0]
+        const s2 =
+          allShapes.find((s) => s.id === cmd.targetOp?.secondTargetShapeId) ??
+          allShapes[allShapes.length - 1]
+        if (s1 && s2 && s1.id !== s2.id) {
+          const x1 = s1.x
+          const y1 = s1.y
+          editor.run(() => {
+            editor.updateShape({ id: s1.id, type: s1.type, x: s2.x, y: s2.y } as any)
+            editor.updateShape({ id: s2.id, type: s2.type, x: x1, y: y1 } as any)
+          })
+        }
+      } else if (cmd.intent === 'group_frame' && cmd.frameOp) {
+        const shapes = summarizeCanvasShapes(editor, ghostShapeIdRef.current)
+        if (shapes.length > 0) {
+          const minX = Math.min(...shapes.map((s) => s.x)) - 60
+          const minY = Math.min(...shapes.map((s) => s.y)) - 70
+          const maxX = Math.max(...shapes.map((s) => s.x + s.w)) + 60
+          const maxY = Math.max(...shapes.map((s) => s.y + s.h)) + 60
+          const frameId = createShapeId()
+          editor.createShape({
+            id: frameId,
+            type: 'frame',
+            x: minX,
+            y: minY,
+            props: {
+              w: Math.max(360, maxX - minX),
+              h: Math.max(240, maxY - minY),
+              name: cmd.frameOp.frameLabel,
+              color: theme.mutedColor,
+            },
+          } as any)
+          editor.sendToBack([frameId])
+          editor.zoomToFit({ animation: { duration: 280 } })
+        }
+      } else if (cmd.intent === 'distribute_shapes') {
+        const shapes = (editor.getCurrentPageShapes() as any[]).filter(
+          (s) => s.type !== 'arrow' && s.type !== 'frame'
+        )
+        if (shapes.length > 0) {
+          editor.run(() => {
+            if (cmd.alignment === 'circle') {
+              const radius = Math.max(240, shapes.length * 52)
+              shapes.forEach((s, idx) => {
+                const angle = (idx / shapes.length) * Math.PI * 2 - Math.PI / 2
+                const w = s.props?.w ?? 200
+                const h = s.props?.h ?? 110
+                editor.updateShape({
+                  id: s.id,
+                  type: s.type,
+                  x: Math.round(cx + Math.cos(angle) * radius - w / 2),
+                  y: Math.round(cy + Math.sin(angle) * radius - h / 2),
+                } as any)
+              })
+            } else {
+              shapes.forEach((s) => {
+                const dx = (s.x ?? cx) - cx
+                const dy = (s.y ?? cy) - cy
+                editor.updateShape({
+                  id: s.id,
+                  type: s.type,
+                  x: Math.round(cx + dx * 1.32),
+                  y: Math.round(cy + dy * 1.32),
+                } as any)
+              })
+            }
+          })
+          editor.zoomToFit({ animation: { duration: 300 } })
+        }
       } else if (
         (cmd.intent === 'style_target' ||
           cmd.intent === 'move_target' ||
@@ -524,7 +907,9 @@ function App() {
           cmd.intent === 'delete_target') &&
         cmd.targetOp
       ) {
-        const allShapes = (editor.getCurrentPageShapes() as any[]).filter((s) => s.type !== 'arrow')
+        const allShapes = (editor.getCurrentPageShapes() as any[]).filter(
+          (s) => s.type !== 'arrow' && s.id !== ghostShapeIdRef.current
+        )
         const targets = cmd.targetOp.applyToAll
           ? allShapes
           : allShapes.filter((s) => s.id === cmd.targetOp?.targetShapeId)
@@ -533,13 +918,31 @@ function App() {
         if (cmd.intent === 'delete_target') {
           editor.deleteShapes(finalTargets.map((t) => t.id))
         } else if (cmd.intent === 'move_target') {
+          const anchor = cmd.targetOp.relativeToShapeId
+            ? allShapes.find((s) => s.id === cmd.targetOp?.relativeToShapeId)
+            : undefined
+
           for (const t of finalTargets) {
-            editor.updateShape({
-              id: t.id,
-              type: t.type,
-              x: (t.x ?? 0) + (cmd.targetOp.dx ?? 180),
-              y: (t.y ?? 0) + (cmd.targetOp.dy ?? 0),
-            } as any)
+            if (anchor && cmd.targetOp.relativePlacement) {
+              const aw = anchor.props?.w ?? 210
+              const ah = anchor.props?.h ?? 115
+              const tw = t.props?.w ?? 210
+              const th = t.props?.h ?? 115
+              let nx = anchor.x
+              let ny = anchor.y
+              if (cmd.targetOp.relativePlacement === 'above') ny = anchor.y - th - 75
+              else if (cmd.targetOp.relativePlacement === 'below') ny = anchor.y + ah + 75
+              else if (cmd.targetOp.relativePlacement === 'left') nx = anchor.x - tw - 95
+              else if (cmd.targetOp.relativePlacement === 'right') nx = anchor.x + aw + 95
+              editor.updateShape({ id: t.id, type: t.type, x: nx, y: ny } as any)
+            } else {
+              editor.updateShape({
+                id: t.id,
+                type: t.type,
+                x: (t.x ?? 0) + (cmd.targetOp.dx ?? 180),
+                y: (t.y ?? 0) + (cmd.targetOp.dy ?? 0),
+              } as any)
+            }
           }
         } else if (cmd.intent === 'resize_target') {
           const factor = cmd.targetOp.scaleFactor ?? 1.35
@@ -572,17 +975,17 @@ function App() {
         }
       } else if (cmd.intent === 'align_shapes') {
         const shapes = (editor.getCurrentPageShapes() as any[]).filter(
-          (s) => s.type !== 'arrow' && s.type !== 'frame'
+          (s) => s.type !== 'arrow' && s.type !== 'frame' && s.id !== ghostShapeIdRef.current
         )
         if (shapes.length > 0) {
           editor.run(() => {
             if (cmd.alignment === 'row') {
-              const totalW = shapes.length * 260
+              const totalW = shapes.length * 265
               shapes.forEach((s, idx) => {
                 editor.updateShape({
                   id: s.id,
                   type: s.type,
-                  x: cx - totalW / 2 + idx * 260,
+                  x: cx - totalW / 2 + idx * 265,
                   y: cy - 60,
                 } as any)
               })
@@ -604,14 +1007,25 @@ function App() {
                 editor.updateShape({
                   id: s.id,
                   type: s.type,
-                  x: cx - ((cols - 1) * 270) / 2 + c * 270 - 105,
-                  y: cy - 160 + r * 185,
+                  x: cx - ((cols - 1) * 275) / 2 + c * 275 - 105,
+                  y: cy - 160 + r * 190,
                 } as any)
               })
             }
           })
           editor.zoomToFit({ animation: { duration: 280 } })
         }
+      }
+    },
+    [applyThemeToCanvas]
+  )
+
+  const executeCanvasCommand = useCallback(
+    async (cmd: CanvasActionCommand) => {
+      clearSpeculativeGhostShape()
+      const steps = cmd.steps && cmd.steps.length > 1 ? cmd.steps : [cmd]
+      for (const step of steps) {
+        await executeAtomicCommand(step)
       }
 
       setLastExecuted({
@@ -622,25 +1036,26 @@ function App() {
         latencyMs: cmd.latencyMs,
       })
 
-      // Sync updated canvas shape list to WebSocket session for EmbeddingGemma 2 target resolution
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      const editor = editorRef.current
+      if (editor && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(
           JSON.stringify({
             type: 'sync_shapes',
-            canvasShapes: summarizeCanvasShapes(editor),
+            canvasShapes: summarizeCanvasShapes(editor, ghostShapeIdRef.current),
           })
         )
       }
     },
-    [applyThemeToCanvas]
+    [clearSpeculativeGhostShape, executeAtomicCommand]
   )
 
   const dispatchSpokenUtterance = useCallback(
     async (utterance: string): Promise<CanvasActionCommand | null> => {
       const clean = utterance.trim()
       if (!clean) return null
+      clearSpeculativeGhostShape()
       const editor = editorRef.current
-      const canvasShapes = editor ? summarizeCanvasShapes(editor) : []
+      const canvasShapes = editor ? summarizeCanvasShapes(editor, ghostShapeIdRef.current) : []
 
       const res = await fetch('/api/voice/command', {
         method: 'POST',
@@ -658,10 +1073,9 @@ function App() {
       }
       return null
     },
-    [executeCanvasCommand]
+    [clearSpeculativeGhostShape, executeCanvasCommand]
   )
 
-  // Expose programmatic voice trigger for E2E verification and console/automation
   useEffect(() => {
     window.voiceCanvasSpeak = dispatchSpokenUtterance
     window.voiceCanvasHarmonize = async (goalPrompt = 'cohesive high-contrast architectural diagram') => {
@@ -669,7 +1083,6 @@ function App() {
     }
   }, [dispatchSpokenUtterance])
 
-  // Poll /api/voice/catalog once to check ML status
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null
     const checkStatus = async () => {
@@ -682,9 +1095,7 @@ function App() {
             if (timer) clearInterval(timer)
           }
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
     checkStatus()
     timer = setInterval(checkStatus, 3000)
@@ -693,13 +1104,15 @@ function App() {
     }
   }, [])
 
-  // Connect WebSocket + Earlybird 16kHz AudioWorklet stream + Silence VAD auto-commit
+  // Connect WebSocket + Earlybird 16kHz AudioWorklet stream + Cooperative Browser SpeechRecognition Booster
   useEffect(() => {
     let cancelled = false
     let audioCtx: AudioContext | null = null
     let mediaStream: MediaStream | null = null
     let silenceTimer: ReturnType<typeof setTimeout> | null = null
     let latestTranscriptRef = ''
+    let lastCommitTime = 0
+    let speechRec: any = null
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(`${proto}//${location.host}/ws/voice`)
@@ -715,10 +1128,15 @@ function App() {
             ws.send(
               JSON.stringify({
                 type: 'sync_shapes',
-                canvasShapes: summarizeCanvasShapes(editorRef.current),
+                canvasShapes: summarizeCanvasShapes(editorRef.current, ghostShapeIdRef.current),
               })
             )
           }
+          return
+        }
+        if (msg.type === 'speculative_intent' && msg.command) {
+          setSpeculativeSummary(msg.command.summary)
+          syncSpeculativeGhostShape(msg.command)
           return
         }
         if (msg.type === 'transcript') {
@@ -728,17 +1146,24 @@ function App() {
           setGhostWords(guess)
           if (msg.speculative?.summary) {
             setSpeculativeSummary(msg.speculative.summary)
+            syncSpeculativeGhostShape(msg.speculative)
           }
           const joined = words.map((w) => w[0]).join(' ').trim()
           if (joined && joined !== latestTranscriptRef) {
             latestTranscriptRef = joined
             if (silenceTimer) clearTimeout(silenceTimer)
-            // Auto-commit when speaker pauses for 850ms after Earlybird predicts words
             silenceTimer = setTimeout(() => {
               const phraseToCommit = latestTranscriptRef.trim()
-              if (phraseToCommit.length >= 3 && ws.readyState === WebSocket.OPEN) {
+              if (
+                phraseToCommit.length >= 3 &&
+                Date.now() - lastCommitTime > 1200 &&
+                ws.readyState === WebSocket.OPEN
+              ) {
+                lastCommitTime = Date.now()
                 latestTranscriptRef = ''
-                const shapes = editorRef.current ? summarizeCanvasShapes(editorRef.current) : []
+                const shapes = editorRef.current
+                  ? summarizeCanvasShapes(editorRef.current, ghostShapeIdRef.current)
+                  : []
                 ws.send(
                   JSON.stringify({
                     type: 'commit',
@@ -757,9 +1182,7 @@ function App() {
           setGhostWords([])
           setSpeculativeSummary('')
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
 
     async function startMicrophone() {
@@ -795,11 +1218,54 @@ function App() {
       } catch {
         setMicState('air-keyboard')
       }
+
+      // Cooperative Web Speech API booster (for instant interim ghost preview & fallback on CPU warmup)
+      const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+      if (SR && !cancelled) {
+        try {
+          speechRec = new SR()
+          speechRec.continuous = true
+          speechRec.interimResults = true
+          speechRec.lang = 'en-US'
+          speechRec.onresult = (event: any) => {
+            let interim = ''
+            let finalPhrase = ''
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+              const transcript = event.results[i][0].transcript
+              if (event.results[i].isFinal) {
+                finalPhrase += transcript
+              } else {
+                interim += transcript
+              }
+            }
+            if (interim.trim() && liveWords.length === 0) {
+              const parts = interim.trim().split(/\s+/)
+              setLiveWords(parts.map((w: string) => [w, 0.88]))
+              if (ws.readyState === WebSocket.OPEN && interim.trim().length >= 4) {
+                ws.send(JSON.stringify({ type: 'speculate', utterance: interim.trim() }))
+              }
+            }
+            if (finalPhrase.trim().length >= 3 && Date.now() - lastCommitTime > 1200) {
+              lastCommitTime = Date.now()
+              latestTranscriptRef = ''
+              if (silenceTimer) clearTimeout(silenceTimer)
+              dispatchSpokenUtterance(finalPhrase.trim())
+            }
+          }
+          speechRec.onend = () => {
+            if (!cancelled) {
+              try {
+                speechRec.start()
+              } catch {}
+            }
+          }
+          speechRec.start()
+        } catch {}
+      }
     }
 
     startMicrophone()
 
-    // Unlock AudioContext on first pointer movement or keystroke if suspended by browser policy
     const unlockAudio = () => {
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume().catch(() => {})
@@ -814,6 +1280,9 @@ function App() {
       window.removeEventListener('pointerdown', unlockAudio)
       window.removeEventListener('keydown', unlockAudio)
       try {
+        speechRec?.stop()
+      } catch {}
+      try {
         ws.close()
       } catch {}
       try {
@@ -823,7 +1292,7 @@ function App() {
         audioCtx?.close()
       } catch {}
     }
-  }, [executeCanvasCommand])
+  }, [dispatchSpokenUtterance, executeCanvasCommand, syncSpeculativeGhostShape])
 
   // Air-typing support: user can also speak by simply typing in mid-air (no input boxes or buttons!)
   useEffect(() => {
@@ -832,6 +1301,7 @@ function App() {
       if (e.key === 'Escape') {
         setAirTypingBuffer('')
         setSpeculativeSummary('')
+        clearSpeculativeGhostShape()
         return
       }
       if (e.key === 'Enter') {
@@ -844,7 +1314,14 @@ function App() {
         return
       }
       if (e.key === 'Backspace') {
-        setAirTypingBuffer((prev) => prev.slice(0, -1))
+        setAirTypingBuffer((prev) => {
+          const next = prev.slice(0, -1)
+          if (!next.trim()) {
+            clearSpeculativeGhostShape()
+            setSpeculativeSummary('')
+          }
+          return next
+        })
         return
       }
       if (e.key.length === 1) {
@@ -859,145 +1336,129 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [dispatchSpokenUtterance])
+  }, [clearSpeculativeGhostShape, dispatchSpokenUtterance])
 
-  const handleMount = useCallback(
-    (editor: Editor) => {
-      editorRef.current = editor
-      window.__tldrawEditor = editor
+  const handleMount = useCallback((editor: Editor) => {
+    editorRef.current = editor
+    window.__tldrawEditor = editor
 
-      // Initialize dark blueprint mode and seed a clean initial voice architecture diagram
-      editor.user.updateUserPreferences({ colorScheme: 'dark' })
+    editor.user.updateUserPreferences({ colorScheme: 'dark' })
 
-      if (editor.getCurrentPageShapes().length === 0) {
-        const idTitle = createShapeId()
-        const idEb = createShapeId()
-        const idGemma = createShapeId()
-        const idCanvas = createShapeId()
-        const idNote = createShapeId()
+    if (editor.getCurrentPageShapes().length === 0) {
+      const idTitle = createShapeId()
+      const idEb = createShapeId()
+      const idGemma = createShapeId()
+      const idCanvas = createShapeId()
+      const idNote = createShapeId()
 
-        editor.run(() => {
-          editor.createShape({
-            id: idTitle,
-            type: 'text',
-            x: -320,
-            y: -250,
-            props: {
-              color: 'light-blue',
-              size: 'xl',
-              font: 'mono',
-              richText: toRichText('EARLYBIRD × EMBEDDINGGEMMA 2 · VOICE CANVAS'),
-              autoSize: true,
-            },
-          } as any)
+      editor.run(() => {
+        editor.createShape({
+          id: idTitle,
+          type: 'text',
+          x: -330,
+          y: -255,
+          props: {
+            color: 'light-blue',
+            size: 'xl',
+            font: 'mono',
+            richText: toRichText('EARLYBIRD × EMBEDDINGGEMMA 2 · VOICE CANVAS'),
+            autoSize: true,
+          },
+        } as any)
 
-          editor.createShape({
-            id: idEb,
-            type: 'geo',
-            x: -420,
-            y: -80,
-            props: {
-              geo: 'hexagon',
-              w: 230,
-              h: 125,
-              color: 'light-blue',
-              fill: 'semi',
-              dash: 'solid',
-              font: 'mono',
-              size: 'm',
-              richText: toRichText('Earlybird 29M (-90ms STT)'),
-            },
-          } as any)
+        const ebNode = { id: idEb, x: -430, y: -80, w: 235, h: 125 }
+        const gemmaNode = { id: idGemma, x: -115, y: -80, w: 245, h: 125 }
+        const canvasNode = { id: idCanvas, x: 210, y: -80, w: 235, h: 125 }
 
-          editor.createShape({
-            id: idGemma,
-            type: 'geo',
-            x: -115,
-            y: -80,
-            props: {
-              geo: 'hexagon',
-              w: 240,
-              h: 125,
-              color: 'violet',
-              fill: 'solid',
-              dash: 'solid',
-              font: 'mono',
-              size: 'm',
-              richText: toRichText('EmbeddingGemma 2 (768d)'),
-            },
-          } as any)
+        editor.createShape({
+          id: idEb,
+          type: 'geo',
+          x: ebNode.x,
+          y: ebNode.y,
+          props: {
+            geo: 'hexagon',
+            w: ebNode.w,
+            h: ebNode.h,
+            color: 'light-blue',
+            fill: 'semi',
+            dash: 'solid',
+            font: 'mono',
+            size: 'm',
+            richText: toRichText('Earlybird 29M (-90ms STT)'),
+          },
+        } as any)
 
-          editor.createShape({
-            id: idCanvas,
-            type: 'geo',
-            x: 205,
-            y: -80,
-            props: {
-              geo: 'rectangle',
-              w: 230,
-              h: 125,
-              color: 'light-green',
-              fill: 'semi',
-              dash: 'solid',
-              font: 'mono',
-              size: 'm',
-              richText: toRichText('Zero-UI tldraw Canvas'),
-            },
-          } as any)
+        editor.createShape({
+          id: idGemma,
+          type: 'geo',
+          x: gemmaNode.x,
+          y: gemmaNode.y,
+          props: {
+            geo: 'hexagon',
+            w: gemmaNode.w,
+            h: gemmaNode.h,
+            color: 'violet',
+            fill: 'solid',
+            dash: 'solid',
+            font: 'mono',
+            size: 'm',
+            richText: toRichText('EmbeddingGemma 2 (768d)'),
+          },
+        } as any)
 
-          editor.createShape({
-            id: idNote,
-            type: 'note',
-            x: -100,
-            y: 110,
-            props: {
-              color: 'yellow',
-              size: 's',
-              font: 'mono',
-              richText: toRichText(
-                'Just talk: "switch to cyberpunk neon", "generate a mind map", "add a cloud node called Gateway"'
-              ),
-            },
-          } as any)
+        editor.createShape({
+          id: idCanvas,
+          type: 'geo',
+          x: canvasNode.x,
+          y: canvasNode.y,
+          props: {
+            geo: 'rectangle',
+            w: canvasNode.w,
+            h: canvasNode.h,
+            color: 'light-green',
+            fill: 'semi',
+            dash: 'solid',
+            font: 'mono',
+            size: 'm',
+            richText: toRichText('Zero-UI tldraw Canvas'),
+          },
+        } as any)
 
-          editor.createShape({
-            id: createShapeId(),
-            type: 'arrow',
-            x: 0,
-            y: 0,
-            props: {
-              start: { x: -190, y: -18 },
-              end: { x: -115, y: -18 },
-              color: 'light-blue',
-              dash: 'solid',
-              size: 'm',
-              font: 'mono',
-              richText: toRichText('80ms stream'),
-            },
-          } as any)
+        editor.createShape({
+          id: idNote,
+          type: 'note',
+          x: -95,
+          y: 115,
+          props: {
+            color: 'yellow',
+            size: 's',
+            font: 'mono',
+            richText: toRichText(
+              'Just talk: "switch to cyberpunk neon", "generate a mind map", "draw a cloud called CDN and connect it to Earlybird"'
+            ),
+          },
+        } as any)
 
-          editor.createShape({
-            id: createShapeId(),
-            type: 'arrow',
-            x: 0,
-            y: 0,
-            props: {
-              start: { x: 125, y: -18 },
-              end: { x: 205, y: -18 },
-              color: 'violet',
-              dash: 'solid',
-              size: 'm',
-              font: 'mono',
-              richText: toRichText('visual design'),
-            },
-          } as any)
+        createBoundArrow(editor, ebNode, gemmaNode, {
+          label: '80ms stream',
+          color: 'light-blue',
+          dash: 'solid',
+          size: 'm',
+          font: 'mono',
         })
 
-        editor.zoomToFit({ animation: { duration: 0 } })
-      }
-    },
-    []
-  )
+        createBoundArrow(editor, gemmaNode, canvasNode, {
+          label: 'visual design',
+          color: 'violet',
+          dash: 'solid',
+          size: 'm',
+          font: 'mono',
+        })
+      })
+
+      editor.zoomToFit({ animation: { duration: 0 } })
+    }
+  }, [])
 
   const hasLiveSpeech = liveWords.length > 0 || ghostWords.length > 0 || airTypingBuffer.length > 0
   const pulseScale = 1 + Math.min(0.45, micLevel * 3.2)
@@ -1023,6 +1484,13 @@ function App() {
               style={{ transform: `scale(${pulseScale.toFixed(3)})` }}
             />
             <span className="pulse-dot" />
+          </div>
+
+          <div className="eq-bars" aria-hidden="true">
+            {[0.45, 0.85, 1.0, 0.7, 0.5].map((mult, idx) => {
+              const h = Math.max(4, Math.min(18, Math.round(4 + micLevel * 95 * mult)))
+              return <i key={idx} style={{ height: `${h}px` }} />
+            })}
           </div>
 
           <div className="transcript-stream">
@@ -1061,14 +1529,13 @@ function App() {
               </div>
             ) : (
               <div className="idle-prompt">
-                Speak naturally to design — e.g. <em>“generate a system architecture diagram”</em> or{' '}
-                <em>“switch to cyberpunk neon”</em>
+                Speak naturally — try <em>{AMBIENT_SUGGESTIONS[suggestionIdx]}</em>
               </div>
             )}
 
             {speculativeSummary && hasLiveSpeech && (
               <div className="speculative-line">
-                <span className="spec-label">ANTICIPATING</span> {speculativeSummary}
+                <span className="spec-label">GHOST PREVIEW</span> {speculativeSummary}
               </div>
             )}
           </div>

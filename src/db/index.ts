@@ -3,8 +3,23 @@ import { drizzle } from 'drizzle-orm/bun-sqlite'
 import * as schema from './schema'
 
 const sqlite = new Database(Bun.env.DB_FILE_NAME ?? 'local.db')
-sqlite.exec(
-  'CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);'
-)
+sqlite.exec(`
+  CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    completed INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS voice_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    utterance TEXT NOT NULL,
+    intent TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    latency_ms REAL NOT NULL,
+    model_used TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+`)
 
 export const db = drizzle(sqlite, { schema })

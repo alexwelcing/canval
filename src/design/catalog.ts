@@ -32,23 +32,31 @@ export type TldrawGeo =
   | 'check-box'
   | 'heart'
 
+export type CommandIntentId =
+  | 'create_shape'
+  | 'create_note'
+  | 'create_text'
+  | 'connect_shapes'
+  | 'generate_layout'
+  | 'apply_theme'
+  | 'style_target'
+  | 'move_target'
+  | 'resize_target'
+  | 'delete_target'
+  | 'duplicate_target'
+  | 'rename_target'
+  | 'group_frame'
+  | 'align_shapes'
+  | 'distribute_shapes'
+  | 'highlight_target'
+  | 'swap_positions'
+  | 'camera_control'
+  | 'vision_harmonize'
+  | 'undo_redo'
+  | 'clear_canvas'
+
 export interface CommandIntentSpec {
-  id:
-    | 'create_shape'
-    | 'create_note'
-    | 'create_text'
-    | 'connect_shapes'
-    | 'generate_layout'
-    | 'apply_theme'
-    | 'style_target'
-    | 'move_target'
-    | 'resize_target'
-    | 'delete_target'
-    | 'align_shapes'
-    | 'camera_control'
-    | 'vision_harmonize'
-    | 'undo_redo'
-    | 'clear_canvas'
+  id: CommandIntentId
   title: string
   description: string
   exemplars: string[]
@@ -99,6 +107,7 @@ export interface LayoutEdgeBlueprint {
   from: string
   to: string
   label?: string
+  bend?: number
 }
 
 export interface LayoutTemplateSpec {
@@ -116,7 +125,7 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
     id: 'create_shape',
     title: 'Create Shape or Component Node',
     description:
-      'Draw or add a single geometric shape, box, rectangle, circle, diamond, cloud, database, service node, card, star, hexagon, or component onto the canvas.',
+      'Draw or add a single geometric shape, box, rectangle, circle, diamond, cloud, database, service node, card, star, hexagon, checkbox, or component onto the canvas.',
     exemplars: [
       'draw a blue rectangle called API Gateway',
       'add a cloud shape for AWS storage',
@@ -153,9 +162,9 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
   },
   {
     id: 'connect_shapes',
-    title: 'Connect Two Shapes with Arrow',
+    title: 'Connect Two Shapes with Bound Arrow',
     description:
-      'Draw an arrow, line, link, dependency flow, or connection from one shape or node on the canvas to another shape.',
+      'Draw a bound arrow, line, link, dependency flow, or connection from one shape or node on the canvas to another shape.',
     exemplars: [
       'connect the login box to the user store',
       'draw an arrow from API Gateway to Auth Service',
@@ -168,7 +177,7 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
     id: 'generate_layout',
     title: 'Generate Multi-Shape Diagram or Layout Template',
     description:
-      'Build a complete diagram layout, system architecture pipeline, flowchart, mind map, Kanban board, 2x2 matrix, timeline roadmap, or brainstorm sticky cluster.',
+      'Build a complete diagram layout, system architecture pipeline, flowchart, mind map, Kanban board, 2x2 matrix, timeline roadmap, RAG vector pipeline, event mesh, C4 context diagram, or user journey funnel.',
     exemplars: [
       'generate a system architecture diagram',
       'create a decision flowchart for user onboarding',
@@ -176,14 +185,17 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
       'build a kanban board with backlog in progress and done',
       'make a two by two priority matrix',
       'lay out a product roadmap timeline',
-      'create a brainstorm cluster of sticky notes',
+      'generate a rag vector pipeline diagram',
+      'create an event driven pub sub mesh',
+      'draw a c4 system context diagram',
+      'build a user journey funnel',
     ],
   },
   {
     id: 'apply_theme',
     title: 'Apply Visual Design Theme or Aesthetic Vibe',
     description:
-      'Switch the overall visual design system, aesthetic vibe, color palette, typography, dark blueprint style, cyberpunk neon, warm editorial, nordic minimal, or sketchy look across the canvas.',
+      'Switch the overall visual design system, aesthetic vibe, color palette, typography, dark blueprint style, cyberpunk neon, warm editorial, nordic minimal, bauhaus, tokyo midnight, solarized, or sketchy look across the canvas.',
     exemplars: [
       'make the design look like a technical dark blueprint',
       'switch to cyberpunk neon aesthetic',
@@ -192,6 +204,9 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
       'give it a clean nordic minimal design',
       'change the theme to botanical forest',
       'use high contrast executive styling',
+      'switch to bauhaus primary geometric style',
+      'apply tokyo midnight violet theme',
+      'use solarized lab aesthetic',
     ],
   },
   {
@@ -217,7 +232,7 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
       'shift the login box up',
       'put the cache service below the API gateway',
       'move the sticky note to the left',
-      'center the title',
+      'place the gateway above the core engine',
     ],
   },
   {
@@ -245,6 +260,40 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
     ],
   },
   {
+    id: 'duplicate_target',
+    title: 'Duplicate or Clone Shape',
+    description:
+      'Duplicate, clone, copy, or make another instance of an existing shape or node on the canvas.',
+    exemplars: [
+      'duplicate the API gateway',
+      'clone the database node',
+      'make a copy of the sticky note',
+      'duplicate the central hexagon',
+    ],
+  },
+  {
+    id: 'rename_target',
+    title: 'Rename or Update Text of Shape',
+    description:
+      'Rename, relabel, or change the text inside an existing shape, note, or heading.',
+    exemplars: [
+      'rename the database node to Postgres Replica',
+      'relabel the gateway to Edge Proxy',
+      'change the sticky note text to Ship Ready',
+    ],
+  },
+  {
+    id: 'group_frame',
+    title: 'Wrap or Enclose Shapes in a Frame',
+    description:
+      'Create a visual container frame around all shapes or specific nodes to group them into a named subsystem or cluster.',
+    exemplars: [
+      'frame all shapes as Core Platform',
+      'wrap these nodes in a frame called Backend Cluster',
+      'enclose everything in a container frame named Voice Pipeline',
+    ],
+  },
+  {
     id: 'align_shapes',
     title: 'Align or Organize Canvas Shapes',
     description:
@@ -257,15 +306,50 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
     ],
   },
   {
+    id: 'distribute_shapes',
+    title: 'Distribute Shapes Evenly or in a Circle',
+    description:
+      'Space out shapes evenly, spread them apart, or arrange them in a radial circle or ring layout.',
+    exemplars: [
+      'arrange all shapes in a circle',
+      'distribute the nodes evenly',
+      'space everything out more',
+      'put the shapes in a radial ring',
+    ],
+  },
+  {
+    id: 'highlight_target',
+    title: 'Focus or Spotlight Specific Shape',
+    description:
+      'Zoom the camera onto a specific shape, spotlight it, or focus the view on a particular node.',
+    exemplars: [
+      'focus on the database node',
+      'zoom to the API gateway',
+      'spotlight the EmbeddingGemma hexagon',
+      'find the sticky note',
+    ],
+  },
+  {
+    id: 'swap_positions',
+    title: 'Swap Positions of Two Shapes',
+    description:
+      'Swap, exchange, or trade the canvas coordinates of two shapes or nodes.',
+    exemplars: [
+      'swap the Earlybird node and the Zero-UI Canvas',
+      'switch the positions of the gateway and the database',
+      'exchange the login box with the user store',
+    ],
+  },
+  {
     id: 'camera_control',
     title: 'Zoom or Pan Canvas Camera',
     description:
-      'Zoom in, zoom out, fit all shapes into the viewport, or reset the camera view.',
+      'Zoom in, zoom out, fit all shapes into the viewport, or pan the camera view left, right, up, or down.',
     exemplars: [
       'zoom out to see everything',
       'zoom in closer',
       'fit all shapes on screen',
-      'center the camera view',
+      'pan the camera left',
     ],
   },
   {
@@ -421,6 +505,60 @@ export const DESIGN_THEMES: DesignThemeSpec[] = [
     font: 'sans',
     size: 'l',
   },
+  {
+    id: 'bauhaus-geometric',
+    name: 'Bauhaus Primary',
+    title: 'Bauhaus Modernist Geometry',
+    description:
+      'Iconic Weimar Bauhaus poster aesthetic on warm museum cardstock with primary red, cobalt blue, ochre yellow, and heavy black structural lines.',
+    isDark: false,
+    canvasBg: '#f4efe6',
+    accentHex: '#dc2626',
+    primaryColor: 'red',
+    secondaryColor: 'blue',
+    accentColor: 'yellow',
+    mutedColor: 'black',
+    fill: 'solid',
+    dash: 'solid',
+    font: 'sans',
+    size: 'm',
+  },
+  {
+    id: 'tokyo-midnight',
+    name: 'Tokyo Midnight',
+    title: 'Tokyo Midnight Indigo & Coral',
+    description:
+      'Atmospheric nocturnal Tokyo design system with deep indigo background, soft lavender violet, coral rose, and crisp cyan data lines.',
+    isDark: true,
+    canvasBg: '#070814',
+    accentHex: '#f472b6',
+    primaryColor: 'light-violet',
+    secondaryColor: 'light-blue',
+    accentColor: 'light-red',
+    mutedColor: 'violet',
+    fill: 'semi',
+    dash: 'solid',
+    font: 'sans',
+    size: 'm',
+  },
+  {
+    id: 'solarized-lab',
+    name: 'Solarized Lab',
+    title: 'Solarized Dark Research Terminal',
+    description:
+      'Precision scientific instrument aesthetic inspired by Ethan Schoonover Solarized Dark with deep teal-slate background, cyan, amber yellow, and green.',
+    isDark: true,
+    canvasBg: '#00212b',
+    accentHex: '#2aa198',
+    primaryColor: 'light-blue',
+    secondaryColor: 'yellow',
+    accentColor: 'light-green',
+    mutedColor: 'orange',
+    fill: 'semi',
+    dash: 'dashed',
+    font: 'mono',
+    size: 'm',
+  },
 ]
 
 export const SHAPE_ARCHETYPES: ShapeArchetypeSpec[] = [
@@ -443,18 +581,18 @@ export const SHAPE_ARCHETYPES: ShapeArchetypeSpec[] = [
     geo: 'oval',
     defaultColor: 'green',
     defaultFill: 'semi',
-    width: 200,
+    width: 205,
     height: 115,
   },
   {
     id: 'cloud-node',
     title: 'Cloud / External Network',
-    description: 'Cloud infrastructure, internet, AWS, external third-party API, CDN, or serverless cluster.',
+    description: 'Cloud infrastructure, internet, AWS, GCP, external third-party API, CDN, or serverless cluster.',
     kind: 'geo',
     geo: 'cloud',
     defaultColor: 'light-violet',
     defaultFill: 'semi',
-    width: 230,
+    width: 235,
     height: 130,
   },
   {
@@ -465,8 +603,8 @@ export const SHAPE_ARCHETYPES: ShapeArchetypeSpec[] = [
     geo: 'diamond',
     defaultColor: 'orange',
     defaultFill: 'semi',
-    width: 190,
-    height: 140,
+    width: 195,
+    height: 145,
   },
   {
     id: 'actor-circle',
@@ -487,7 +625,7 @@ export const SHAPE_ARCHETYPES: ShapeArchetypeSpec[] = [
     geo: 'hexagon',
     defaultColor: 'violet',
     defaultFill: 'solid',
-    width: 215,
+    width: 220,
     height: 125,
   },
   {
@@ -498,7 +636,7 @@ export const SHAPE_ARCHETYPES: ShapeArchetypeSpec[] = [
     geo: 'triangle',
     defaultColor: 'red',
     defaultFill: 'semi',
-    width: 180,
+    width: 185,
     height: 150,
   },
   {
@@ -509,8 +647,8 @@ export const SHAPE_ARCHETYPES: ShapeArchetypeSpec[] = [
     geo: 'star',
     defaultColor: 'yellow',
     defaultFill: 'solid',
-    width: 175,
-    height: 175,
+    width: 180,
+    height: 180,
   },
   {
     id: 'pipeline-trapezoid',
@@ -522,6 +660,39 @@ export const SHAPE_ARCHETYPES: ShapeArchetypeSpec[] = [
     defaultFill: 'semi',
     width: 220,
     height: 110,
+  },
+  {
+    id: 'transform-rhombus',
+    title: 'Data Transform / Adapter Parallelogram',
+    description: 'ETL transform, parser, serializer, embedding projection, or adapter stage.',
+    kind: 'geo',
+    geo: 'rhombus',
+    defaultColor: 'light-blue',
+    defaultFill: 'semi',
+    width: 215,
+    height: 110,
+  },
+  {
+    id: 'check-item',
+    title: 'Verified / Approved Check Box',
+    description: 'Completed task, verified check, passing test, or approved gate.',
+    kind: 'geo',
+    geo: 'check-box',
+    defaultColor: 'light-green',
+    defaultFill: 'semi',
+    width: 190,
+    height: 105,
+  },
+  {
+    id: 'favorite-heart',
+    title: 'Delight / Core Value Heart',
+    description: 'User delight, favorite metric, brand love, or customer loyalty node.',
+    kind: 'geo',
+    geo: 'heart',
+    defaultColor: 'light-red',
+    defaultFill: 'solid',
+    width: 170,
+    height: 160,
   },
   {
     id: 'sticky-note',
@@ -544,11 +715,11 @@ export const LAYOUT_TEMPLATES: LayoutTemplateSpec[] = [
       'End-to-end technical system architecture diagram with Client ingress, Gateway, AI/Core Engine, Cache, and Database tiers connected by data flow arrows.',
     frameLabel: 'System Architecture',
     nodes: [
-      { key: 'client', label: 'Voice Client', archetype: 'actor-circle', dx: -420, dy: 0, colorRole: 'accent' },
-      { key: 'gateway', label: 'Stream Gateway', archetype: 'pipeline-trapezoid', dx: -140, dy: 0, colorRole: 'primary' },
-      { key: 'engine', label: 'Core Engine', archetype: 'engine-hexagon', dx: 150, dy: -90, colorRole: 'secondary' },
-      { key: 'cache', label: 'Vector Index', archetype: 'service-box', dx: 150, dy: 95, colorRole: 'primary' },
-      { key: 'db', label: 'Primary Store', archetype: 'database-node', dx: 430, dy: 0, colorRole: 'accent' },
+      { key: 'client', label: 'Voice Client', archetype: 'actor-circle', dx: -440, dy: 0, colorRole: 'accent' },
+      { key: 'gateway', label: 'Stream Gateway', archetype: 'pipeline-trapezoid', dx: -150, dy: 0, colorRole: 'primary' },
+      { key: 'engine', label: 'Core Engine', archetype: 'engine-hexagon', dx: 155, dy: -110, colorRole: 'secondary' },
+      { key: 'cache', label: 'Vector Index', archetype: 'service-box', dx: 155, dy: 110, colorRole: 'primary' },
+      { key: 'db', label: 'Primary Store', archetype: 'database-node', dx: 450, dy: 0, colorRole: 'accent' },
     ],
     edges: [
       { from: 'client', to: 'gateway', label: 'PCM 16kHz' },
@@ -566,11 +737,11 @@ export const LAYOUT_TEMPLATES: LayoutTemplateSpec[] = [
       'Structured algorithmic flowchart with a starting state, processing step, conditional decision diamond, and approved vs fallback outcome branches.',
     frameLabel: 'Decision Flow',
     nodes: [
-      { key: 'start', label: 'Voice Input', archetype: 'actor-circle', dx: -380, dy: 0, colorRole: 'primary' },
-      { key: 'parse', label: 'Embed Intent', archetype: 'service-box', dx: -120, dy: 0, colorRole: 'primary' },
+      { key: 'start', label: 'Voice Input', archetype: 'actor-circle', dx: -400, dy: 0, colorRole: 'primary' },
+      { key: 'parse', label: 'Embed Intent', archetype: 'service-box', dx: -130, dy: 0, colorRole: 'primary' },
       { key: 'check', label: 'Confidence > 85%?', archetype: 'decision-diamond', dx: 150, dy: 0, colorRole: 'accent' },
-      { key: 'exec', label: 'Execute on Canvas', archetype: 'engine-hexagon', dx: 420, dy: -110, colorRole: 'secondary' },
-      { key: 'ghost', label: 'Show Ghost Preview', archetype: 'sticky-note', dx: 420, dy: 115, colorRole: 'muted' },
+      { key: 'exec', label: 'Execute on Canvas', archetype: 'engine-hexagon', dx: 440, dy: -120, colorRole: 'secondary' },
+      { key: 'ghost', label: 'Show Ghost Preview', archetype: 'sticky-note', dx: 440, dy: 125, colorRole: 'muted' },
     ],
     edges: [
       { from: 'start', to: 'parse' },
@@ -587,18 +758,18 @@ export const LAYOUT_TEMPLATES: LayoutTemplateSpec[] = [
       'Central core thesis node surrounded by five radiating thematic branches for brainstorming, concept mapping, and topic exploration.',
     frameLabel: 'Concept Mind Map',
     nodes: [
-      { key: 'center', label: 'Central Idea', archetype: 'engine-hexagon', dx: 0, dy: 0, w: 240, h: 135, colorRole: 'primary' },
-      { key: 'n1', label: 'Voice UX', archetype: 'service-box', dx: -340, dy: -170, colorRole: 'secondary' },
-      { key: 'n2', label: 'Visual Design', archetype: 'service-box', dx: 340, dy: -170, colorRole: 'accent' },
-      { key: 'n3', label: 'Local Models', archetype: 'cloud-node', dx: -360, dy: 150, colorRole: 'secondary' },
-      { key: 'n4', label: 'Zero Buttons', archetype: 'milestone-star', dx: 360, dy: 150, colorRole: 'accent' },
-      { key: 'n5', label: 'Key Notes', archetype: 'sticky-note', dx: 0, dy: 250, colorRole: 'muted' },
+      { key: 'center', label: 'Central Idea', archetype: 'engine-hexagon', dx: 0, dy: 0, w: 245, h: 135, colorRole: 'primary' },
+      { key: 'n1', label: 'Voice UX', archetype: 'service-box', dx: -360, dy: -180, colorRole: 'secondary' },
+      { key: 'n2', label: 'Visual Design', archetype: 'service-box', dx: 360, dy: -180, colorRole: 'accent' },
+      { key: 'n3', label: 'Local Models', archetype: 'cloud-node', dx: -380, dy: 160, colorRole: 'secondary' },
+      { key: 'n4', label: 'Zero Buttons', archetype: 'milestone-star', dx: 380, dy: 160, colorRole: 'accent' },
+      { key: 'n5', label: 'Key Notes', archetype: 'sticky-note', dx: 0, dy: 265, colorRole: 'muted' },
     ],
     edges: [
-      { from: 'center', to: 'n1' },
-      { from: 'center', to: 'n2' },
-      { from: 'center', to: 'n3' },
-      { from: 'center', to: 'n4' },
+      { from: 'center', to: 'n1', bend: 24 },
+      { from: 'center', to: 'n2', bend: -24 },
+      { from: 'center', to: 'n3', bend: -20 },
+      { from: 'center', to: 'n4', bend: 20 },
       { from: 'center', to: 'n5' },
     ],
   },
@@ -610,12 +781,12 @@ export const LAYOUT_TEMPLATES: LayoutTemplateSpec[] = [
       'Agile project board with three structured vertical columns for Backlog, Active Work, and Completed items with task cards underneath.',
     frameLabel: 'Kanban Workflow',
     nodes: [
-      { key: 'col1', label: 'BACKLOG', archetype: 'service-box', dx: -320, dy: -160, w: 240, h: 80, colorRole: 'muted' },
-      { key: 'c1a', label: 'Multi-modal Critique', archetype: 'sticky-note', dx: -320, dy: 30, colorRole: 'muted' },
-      { key: 'col2', label: 'IN PROGRESS', archetype: 'service-box', dx: 0, dy: -160, w: 240, h: 80, colorRole: 'primary' },
-      { key: 'c2a', label: 'Live Voice Canvas', archetype: 'sticky-note', dx: 0, dy: 30, colorRole: 'primary' },
-      { key: 'col3', label: 'SHIPPED', archetype: 'service-box', dx: 320, dy: -160, w: 240, h: 80, colorRole: 'accent' },
-      { key: 'c3a', label: 'Earlybird 80ms Stream', archetype: 'sticky-note', dx: 320, dy: 30, colorRole: 'accent' },
+      { key: 'col1', label: 'BACKLOG', archetype: 'service-box', dx: -330, dy: -165, w: 240, h: 80, colorRole: 'muted' },
+      { key: 'c1a', label: 'Multi-modal Critique', archetype: 'sticky-note', dx: -330, dy: 35, colorRole: 'muted' },
+      { key: 'col2', label: 'IN PROGRESS', archetype: 'service-box', dx: 0, dy: -165, w: 240, h: 80, colorRole: 'primary' },
+      { key: 'c2a', label: 'Live Voice Canvas', archetype: 'sticky-note', dx: 0, dy: 35, colorRole: 'primary' },
+      { key: 'col3', label: 'SHIPPED', archetype: 'check-item', dx: 330, dy: -165, w: 240, h: 80, colorRole: 'accent' },
+      { key: 'c3a', label: 'Earlybird 80ms Stream', archetype: 'sticky-note', dx: 330, dy: 35, colorRole: 'accent' },
     ],
     edges: [
       { from: 'col1', to: 'col2', label: 'pull' },
@@ -630,14 +801,12 @@ export const LAYOUT_TEMPLATES: LayoutTemplateSpec[] = [
       'Four-quadrant strategic comparison grid organizing initiatives into Quick Wins, Major Bets, Fill-Ins, and Hard Slogs.',
     frameLabel: '2x2 Strategy Matrix',
     nodes: [
-      { key: 'q1', label: 'Quick Wins (High Impact / Low Effort)', archetype: 'service-box', dx: -200, dy: -120, w: 280, h: 150, colorRole: 'accent' },
-      { key: 'q2', label: 'Major Bets (High Impact / High Effort)', archetype: 'service-box', dx: 200, dy: -120, w: 280, h: 150, colorRole: 'primary' },
-      { key: 'q3', label: 'Fill-Ins (Low Impact / Low Effort)', archetype: 'service-box', dx: -200, dy: 120, w: 280, h: 150, colorRole: 'muted' },
-      { key: 'q4', label: 'Reconsider (Low Impact / High Effort)', archetype: 'service-box', dx: 200, dy: 120, w: 280, h: 150, colorRole: 'secondary' },
+      { key: 'q1', label: 'Quick Wins (High Impact / Low Effort)', archetype: 'service-box', dx: -210, dy: -125, w: 290, h: 155, colorRole: 'accent' },
+      { key: 'q2', label: 'Major Bets (High Impact / High Effort)', archetype: 'service-box', dx: 210, dy: -125, w: 290, h: 155, colorRole: 'primary' },
+      { key: 'q3', label: 'Fill-Ins (Low Impact / Low Effort)', archetype: 'service-box', dx: -210, dy: 125, w: 290, h: 155, colorRole: 'muted' },
+      { key: 'q4', label: 'Reconsider (Low Impact / High Effort)', archetype: 'service-box', dx: 210, dy: 125, w: 290, h: 155, colorRole: 'secondary' },
     ],
-    edges: [
-      { from: 'q1', to: 'q2', label: 'scale up' },
-    ],
+    edges: [{ from: 'q1', to: 'q2', label: 'scale up' }],
   },
   {
     id: 'timeline-roadmap',
@@ -647,15 +816,96 @@ export const LAYOUT_TEMPLATES: LayoutTemplateSpec[] = [
       'Horizontal chronological timeline showing sequential phases from Foundation to Launch with milestone callouts.',
     frameLabel: 'Timeline Roadmap',
     nodes: [
-      { key: 'p1', label: 'Phase 1: Voice Core', archetype: 'service-box', dx: -390, dy: 0, colorRole: 'primary' },
-      { key: 'p2', label: 'Phase 2: Semantic Design', archetype: 'service-box', dx: -130, dy: 0, colorRole: 'primary' },
-      { key: 'p3', label: 'Phase 3: Vision Align', archetype: 'engine-hexagon', dx: 130, dy: 0, colorRole: 'secondary' },
-      { key: 'p4', label: 'Phase 4: Zero-UI Release', archetype: 'milestone-star', dx: 390, dy: 0, colorRole: 'accent' },
+      { key: 'p1', label: 'Phase 1: Voice Core', archetype: 'service-box', dx: -400, dy: 0, colorRole: 'primary' },
+      { key: 'p2', label: 'Phase 2: Semantic Design', archetype: 'service-box', dx: -135, dy: 0, colorRole: 'primary' },
+      { key: 'p3', label: 'Phase 3: Vision Align', archetype: 'engine-hexagon', dx: 135, dy: 0, colorRole: 'secondary' },
+      { key: 'p4', label: 'Phase 4: Zero-UI Release', archetype: 'milestone-star', dx: 400, dy: 0, colorRole: 'accent' },
     ],
     edges: [
       { from: 'p1', to: 'p2' },
       { from: 'p2', to: 'p3' },
       { from: 'p3', to: 'p4' },
+    ],
+  },
+  {
+    id: 'rag-vector-pipeline',
+    name: 'Multimodal RAG Pipeline',
+    title: 'Multimodal Embedding & RAG Retrieval Pipeline',
+    description:
+      'AI retrieval architecture showing Document/Image Ingestion, EmbeddingGemma 2 768d Encoder, Matryoshka Vector Index, Semantic Reranker, and Context Generator.',
+    frameLabel: 'Multimodal RAG Pipeline',
+    nodes: [
+      { key: 'ingest', label: 'Text + Vision Input', archetype: 'pipeline-trapezoid', dx: -440, dy: 0, colorRole: 'primary' },
+      { key: 'embed', label: 'EmbeddingGemma 2 (768d)', archetype: 'engine-hexagon', dx: -150, dy: 0, colorRole: 'secondary' },
+      { key: 'index', label: 'MRL Vector Store', archetype: 'database-node', dx: 150, dy: -110, colorRole: 'accent' },
+      { key: 'rerank', label: 'Cosine Router', archetype: 'decision-diamond', dx: 150, dy: 110, colorRole: 'primary' },
+      { key: 'out', label: 'Canvas Action', archetype: 'milestone-star', dx: 440, dy: 0, colorRole: 'accent' },
+    ],
+    edges: [
+      { from: 'ingest', to: 'embed', label: 'interleaved' },
+      { from: 'embed', to: 'index', label: 'normalize' },
+      { from: 'embed', to: 'rerank', label: 'query' },
+      { from: 'index', to: 'rerank', label: 'top-k' },
+      { from: 'rerank', to: 'out', label: 'execute' },
+    ],
+  },
+  {
+    id: 'event-driven-mesh',
+    name: 'Event-Driven Mesh',
+    title: 'Event-Driven Pub/Sub Streaming Mesh',
+    description:
+      'Distributed event-driven broker mesh connecting Producers, Event Bus Stream, Analytics Worker, Alert Monitor, and Audit Sink.',
+    frameLabel: 'Event-Driven Mesh',
+    nodes: [
+      { key: 'prod', label: 'Audio Producer', archetype: 'actor-circle', dx: -420, dy: 0, colorRole: 'primary' },
+      { key: 'bus', label: 'Event Stream Bus', archetype: 'pipeline-trapezoid', dx: -110, dy: 0, w: 240, h: 120, colorRole: 'secondary' },
+      { key: 'w1', label: 'STT Consumer', archetype: 'engine-hexagon', dx: 240, dy: -150, colorRole: 'primary' },
+      { key: 'w2', label: 'Design Engine', archetype: 'engine-hexagon', dx: 240, dy: 0, colorRole: 'accent' },
+      { key: 'w3', label: 'Latency Alert', archetype: 'alert-triangle', dx: 240, dy: 155, colorRole: 'muted' },
+    ],
+    edges: [
+      { from: 'prod', to: 'bus', label: 'publish' },
+      { from: 'bus', to: 'w1', label: 'sub:pcm' },
+      { from: 'bus', to: 'w2', label: 'sub:intent' },
+      { from: 'bus', to: 'w3', label: 'sub:sla' },
+    ],
+  },
+  {
+    id: 'c4-system-context',
+    name: 'C4 System Context',
+    title: 'C4 Software Architecture Context Diagram',
+    description:
+      'High-level C4 model system context diagram showing the human Creator, central Canval Voice Studio, Local GPU Models, and Cloud Run Infrastructure.',
+    frameLabel: 'C4 System Context',
+    nodes: [
+      { key: 'user', label: 'Creator (Voice Only)', archetype: 'actor-circle', dx: 0, dy: -210, colorRole: 'accent' },
+      { key: 'core', label: 'Canval Zero-UI Studio', archetype: 'service-box', dx: 0, dy: 0, w: 260, h: 130, colorRole: 'primary' },
+      { key: 'ml', label: 'Earlybird + Gemma 2', archetype: 'engine-hexagon', dx: -340, dy: 160, colorRole: 'secondary' },
+      { key: 'cloud', label: 'Google Cloud Run', archetype: 'cloud-node', dx: 340, dy: 160, colorRole: 'primary' },
+    ],
+    edges: [
+      { from: 'user', to: 'core', label: 'speaks naturally' },
+      { from: 'core', to: 'ml', label: 'JSON-RPC stdio' },
+      { from: 'core', to: 'cloud', label: 'HTTPS / WSS' },
+    ],
+  },
+  {
+    id: 'user-journey-funnel',
+    name: 'User Journey Funnel',
+    title: 'User Conversion & Experience Journey Funnel',
+    description:
+      'Four-stage user experience funnel from Landing on Canvas, Speaking First Word, Speculative Ghost Preview, to Instant Visual Diagram.',
+    frameLabel: 'User Experience Journey',
+    nodes: [
+      { key: 's1', label: '1. Open Canvas (Zero UI)', archetype: 'pipeline-trapezoid', dx: -400, dy: 0, colorRole: 'muted' },
+      { key: 's2', label: '2. Speak Utterance', archetype: 'actor-circle', dx: -135, dy: 0, colorRole: 'primary' },
+      { key: 's3', label: '3. Earlybird -90ms Ghost', archetype: 'transform-rhombus', dx: 135, dy: 0, colorRole: 'secondary' },
+      { key: 's4', label: '4. Live Visual Diagram', archetype: 'favorite-heart', dx: 400, dy: 0, colorRole: 'accent' },
+    ],
+    edges: [
+      { from: 's1', to: 's2', label: 'auto-mic' },
+      { from: 's2', to: 's3', label: '80ms PCM' },
+      { from: 's3', to: 's4', label: 'Gemma 2' },
     ],
   },
 ]

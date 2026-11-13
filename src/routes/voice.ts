@@ -2,13 +2,16 @@ import { Hono } from 'hono'
 import { createBunWebSocket } from 'hono/bun'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { desc } from 'drizzle-orm'
+import { db } from '../db'
+import { voiceEvents } from '../db/schema'
 import {
   COMMAND_INTENTS,
   DESIGN_THEMES,
   LAYOUT_TEMPLATES,
   SHAPE_ARCHETYPES,
 } from '../design/catalog'
-import { routeVoiceCommand } from '../design/router'
+import { routeVoiceCommand, type CanvasActionCommand } from '../design/router'
 import { mlBridge } from '../ml/client'
 
 export const { upgradeWebSocket, websocket } = createBunWebSocket()
@@ -43,14 +46,40 @@ const audioChunkBodySchema = z.object({
   reset: z.boolean().optional(),
 })
 
-function extractConnectionQueries(utterance: string): { fromQuery?: string; toQuery?: string } {
-  const m = utterance
+function extractPairQueries(utterance: string): { fromQuery?: string; toQuery?: string } {
+  const connMatch = utterance
     .trim()
     .match(/\b(?:connect|link|wire|point|draw an? arrow from|arrow from)\s+(?:the\s+)?(.+?)\s+(?:to|with|into|towards)\s+(?:the\s+)?(.+)$/i)
-  if (!m) return {}
-  return {
-    fromQuery: m[1]?.trim(),
-    toQuery: m[2]?.replace(/\bwith label\s+.+$/i, '').trim(),
+  if (connMatch) {
+    return {
+      fromQuery: connMatch[1]?.trim(),
+      toQuery: connMatch[2]?.replace(/\bwith label\s+.+$/i, '').trim(),
+    }
+  }
+  const swapMatch = utterance
+    .trim()
+    .match(/\b(?:swap|exchange|trade positions of|switch the positions of)\s+(?:the\s+)?(.+?)\s+(?:and|with)\s+(?:the\s+)?(.+)$/i)
+  if (swapMatch) {
+    return {
+      fromQuery: swapMatch[1]?.trim(),
+      toQuery: swapMatch[2]?.trim(),
+    }
+  }
+  return {}
+}
+
+async function logVoiceCommand(cmd: CanvasActionCommand) {
+  try {
+    await db.insert(voiceEvents).values({
+      utterance: cmd.utterance,
+      intent: cmd.intent,
+      summary: cmd.summary,
+      confidence: cmd.confidence,
+      latencyMs: cmd.latencyMs,
+      modelUsed: cmd.modelUsed,
+    })
+  } catch {
+    // non-blocking telemetry
   }
 }
 
@@ -64,11 +93,43 @@ export const voiceRoutes = new Hono()
       intents: COMMAND_INTENTS,
     })
   })
+  .get('/api/voice/history', async (c) => {
+    const events = await db
+      .select()
+      .from(voiceEvents)
+      .orderBy(desc(voiceEvents.id))
+      .limit(25)
+    return c.json({ events })
+  })
+  .get('/api/voice/metrics', async (c) => {
+    const events = await db.select().from(voiceEvents).orderBy(desc(voiceEvents.id)).limit(100)
+    const count = events.length
+    const avgLatencyMs =
+      count > 0
+        ? Number((events.reduce((s, e) => s + e.latencyMs, 0) / count).toFixed(1))
+        : 0
+    const avgConfidence =
+      count > 0
+        ? Number((events.reduce((s, e) => s + e.confidence, 0) / count).toFixed(3))
+        : 0
+    const intentCounts: Record<string, number> = {}
+    for (const e of events) {
+      intentCounts[e.intent] = (intentCounts[e.intent] ?? 0) + 1
+    }
+    return c.json({
+      totalCommands: count,
+      avgLatencyMs,
+      avgConfidence,
+      intentCounts,
+      status: mlBridge.getStatus(),
+    })
+  })
   .post('/api/voice/command', zValidator('json', commandBodySchema), async (c) => {
     const { utterance, canvasShapes } = c.req.valid('json')
-    const { fromQuery, toQuery } = extractConnectionQueries(utterance)
+    const { fromQuery, toQuery } = extractPairQueries(utterance)
     const scores = await mlBridge.scoreUtterance(utterance, canvasShapes, fromQuery, toQuery)
     const command = routeVoiceCommand(utterance, canvasShapes, scores)
+    await logVoiceCommand(command)
     return c.json({ command, scores })
   })
   .post('/api/voice/harmonize', zValidator('json', harmonizeBodySchema), async (c) => {
@@ -123,9 +184,10 @@ export const voiceRoutes = new Hono()
               }
               if (msg.type === 'commit' && typeof msg.utterance === 'string' && msg.utterance.trim()) {
                 const shapes = Array.isArray(msg.canvasShapes) ? msg.canvasShapes : latestShapes
-                const { fromQuery, toQuery } = extractConnectionQueries(msg.utterance)
+                const { fromQuery, toQuery } = extractPairQueries(msg.utterance)
                 const scores = await mlBridge.scoreUtterance(msg.utterance, shapes, fromQuery, toQuery)
                 const command = routeVoiceCommand(msg.utterance, shapes, scores)
+                await logVoiceCommand(command)
                 await mlBridge.resetAudioSession(sessionId)
                 ws.send(JSON.stringify({ type: 'command', command, scores }))
                 return
@@ -141,7 +203,6 @@ export const voiceRoutes = new Hono()
             return
           }
 
-          // Binary PCM float32 audio chunk (16 kHz mono)
           let bytes: Uint8Array | null = null
           if (data instanceof ArrayBuffer) {
             bytes = new Uint8Array(data)

@@ -3,7 +3,7 @@ import {
   DESIGN_THEMES,
   LAYOUT_TEMPLATES,
   SHAPE_ARCHETYPES,
-  type CommandIntentSpec,
+  type CommandIntentId,
   type DesignThemeSpec,
   type LayoutTemplateSpec,
   type ShapeArchetypeSpec,
@@ -39,7 +39,7 @@ export interface SemanticScoresPayload {
 }
 
 export interface CanvasActionCommand {
-  intent: CommandIntentSpec['id']
+  intent: CommandIntentId
   confidence: number
   utterance: string
   summary: string
@@ -73,8 +73,11 @@ export interface CanvasActionCommand {
     targetQuery: string
     targetShapeId?: string
     targetLabel?: string
+    secondTargetShapeId?: string
+    secondTargetLabel?: string
     targetSimilarity?: number
     applyToAll?: boolean
+    newLabel?: string
     color?: TldrawColor
     fill?: TldrawFill
     dash?: TldrawDash
@@ -86,9 +89,14 @@ export interface CanvasActionCommand {
     relativePlacement?: 'above' | 'below' | 'left' | 'right'
     scaleFactor?: number
   }
-  alignment?: 'row' | 'column' | 'grid'
-  cameraOp?: 'zoom_in' | 'zoom_out' | 'fit' | 'center'
+  frameOp?: {
+    frameLabel: string
+    targetShapeIds?: string[]
+  }
+  alignment?: 'row' | 'column' | 'grid' | 'circle' | 'spread'
+  cameraOp?: 'zoom_in' | 'zoom_out' | 'fit' | 'center' | 'pan_left' | 'pan_right' | 'pan_up' | 'pan_down'
   historyOp?: 'undo' | 'redo'
+  steps?: CanvasActionCommand[]
 }
 
 const COLOR_SYNONYMS: Record<string, TldrawColor> = {
@@ -101,6 +109,7 @@ const COLOR_SYNONYMS: Record<string, TldrawColor> = {
   silver: 'grey',
   violet: 'violet',
   purple: 'violet',
+  indigo: 'violet',
   magenta: 'light-violet',
   lavender: 'light-violet',
   'light violet': 'light-violet',
@@ -151,10 +160,6 @@ function charTrigrams(text: string): Set<string> {
   return out
 }
 
-/**
- * Local deterministic lexical + subword cosine similarity used to blend with or
- * back up EmbeddingGemma 2 dense scores so both semantic concepts and exact keywords hit 100%.
- */
 export function localSemanticSimilarity(query: string, doc: string): number {
   const qToks = tokenize(query)
   const dToks = new Set(tokenize(doc))
@@ -242,8 +247,16 @@ function extractPositionHint(utterance: string): 'center' | 'left' | 'right' | '
   return undefined
 }
 
+function formatLabelCase(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) return 'Node'
+  return trimmed
+    .split(/\s+/)
+    .map((w) => (w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ')
+}
+
 function extractCleanLabel(utterance: string, fallback: string): string {
-  // Look for explicit label markers first: "called X", "named X", "labeled X", "saying X", "that says X", "for X", "about X"
   const explicitMatch = utterance.match(
     /\b(?:called|named|labeled|labelled|saying|that says|with text|titled|for|about)\s+["']?([^,.!?"]+)["']?/i
   )
@@ -254,18 +267,17 @@ function extractCleanLabel(utterance: string, fallback: string): string {
     if (cleaned.length > 0) return formatLabelCase(cleaned)
   }
 
-  // Otherwise strip leading command verbs, articles, colors, and shape nouns
   const stripped = utterance
     .replace(
       /^(?:please\s+|hey\s+|can you\s+|let's\s+)?(?:draw|create|add|make|put|drop|place|write|type|spawn|throw|insert)\s+(?:a\s+|an\s+|the\s+)?/i,
       ''
     )
     .replace(
-      /\b(?:blue|red|green|yellow|orange|violet|purple|cyan|pink|black|white|grey|gray|light-blue|light-green|light-red|light-violet|big|small|large|tiny|huge|solid|dashed|dotted|sticky)\b/gi,
+      /\b(?:blue|red|green|yellow|orange|violet|purple|cyan|pink|black|white|grey|gray|indigo|light-blue|light-green|light-red|light-violet|big|small|large|tiny|huge|solid|dashed|dotted|sticky)\b/gi,
       ' '
     )
     .replace(
-      /\b(?:rectangle|box|card|square|circle|oval|ellipse|diamond|triangle|cloud|hexagon|star|trapezoid|node|shape|sticky note|post-it|note|memo|title|heading|label|text|banner)\b/gi,
+      /\b(?:rectangle|box|card|square|circle|oval|ellipse|diamond|triangle|cloud|hexagon|star|trapezoid|rhombus|checkbox|check-box|heart|node|shape|sticky note|post-it|note|memo|title|heading|label|text|banner)\b/gi,
       ' '
     )
     .replace(/\b(?:in the center|in the middle|on the left|on the right|at the top|at the bottom|on the canvas|here)\b/gi, ' ')
@@ -276,15 +288,6 @@ function extractCleanLabel(utterance: string, fallback: string): string {
     return formatLabelCase(stripped)
   }
   return fallback
-}
-
-function formatLabelCase(raw: string): string {
-  const trimmed = raw.trim()
-  if (!trimmed) return 'Node'
-  return trimmed
-    .split(/\s+/)
-    .map((w) => (w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1)))
-    .join(' ')
 }
 
 export function resolveBestTarget(
@@ -310,10 +313,27 @@ export function resolveBestTarget(
 }
 
 /**
- * Combines EmbeddingGemma 2 dense similarity scores (when provided by the Python ML worker)
- * with fast linguistic slot extraction to produce a deterministic tldraw CanvasActionCommand.
+ * Splits a multi-clause compound spoken command (e.g. "draw a blue cloud called CDN and connect it to the Stream Gateway")
+ * into ordered atomic clauses while preserving conjunctions inside single commands (like "swap X and Y").
  */
-export function routeVoiceCommand(
+export function splitCompoundUtterance(utterance: string): string[] {
+  const clean = utterance.trim()
+  if (!clean) return []
+  // Do not split "swap X and Y" or "exchange X and Y"
+  if (/^\s*(?:please\s+)?(?:swap|exchange|switch the positions of)\b/i.test(clean)) {
+    return [clean]
+  }
+  const parts = clean
+    .split(
+      /\s*(?:;\s*|\bthen\s+|\band\s+then\s+|\band\s+(?=(?:draw|create|add|make|put|drop|connect|link|wire|point|switch|apply|change|color|move|shift|delete|remove|erase|duplicate|clone|rename|relabel|frame|wrap|align|arrange|distribute|focus|zoom|pan|harmonize|undo|redo|clear)\b))/i
+    )
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 3)
+
+  return parts.length > 0 ? parts : [clean]
+}
+
+export function routeSingleClauseCommand(
   utterance: string,
   canvasShapes: CanvasShapeSummary[] = [],
   denseScores?: SemanticScoresPayload
@@ -322,8 +342,7 @@ export function routeVoiceCommand(
   const clean = utterance.trim()
   const lower = clean.toLowerCase()
 
-  // 1. Score all intents (blend EmbeddingGemma 2 dense scores + local lexical/rule boosts)
-  const intentScores: Record<CommandIntentSpec['id'], number> = {} as Record<CommandIntentSpec['id'], number>
+  const intentScores: Record<CommandIntentId, number> = {} as Record<CommandIntentId, number>
   for (const spec of COMMAND_INTENTS) {
     const corpusText = `${spec.title} ${spec.description} ${spec.exemplars.join(' ')}`
     const localSim = localSemanticSimilarity(clean, corpusText)
@@ -331,67 +350,89 @@ export function routeVoiceCommand(
     intentScores[spec.id] = denseSim !== undefined ? denseSim * 0.75 + localSim * 0.25 : localSim
   }
 
-  // Strong deterministic intent boosts for unambiguous spoken triggers
+  // Deterministic intent boosts for unambiguous spoken triggers
   if (/\b(clear|wipe|reset|erase)\b.*\b(canvas|everything|all|board)\b|^clear$|^reset canvas$/i.test(lower)) {
     intentScores.clear_canvas += 0.85
   }
   if (/\b(undo|step back|take that back|redo)\b/i.test(lower)) {
     intentScores.undo_redo += 0.85
   }
-  if (/\b(zoom in|zoom out|fit|center view|reset zoom|see everything)\b/i.test(lower)) {
-    intentScores.camera_control += 0.8
+  if (/\b(zoom in|zoom out|fit|center view|reset zoom|see everything|pan left|pan right|pan up|pan down)\b/i.test(lower)) {
+    intentScores.camera_control += 0.82
+  }
+  if (/\b(focus on|spotlight|zoom to|find the|locate the)\b/i.test(lower)) {
+    intentScores.highlight_target += 0.84
+  }
+  if (/\b(swap|exchange|trade positions|switch the positions)\b/i.test(lower)) {
+    intentScores.swap_positions += 0.86
+  }
+  if (/\b(duplicate|clone|make a copy of|copy the)\b/i.test(lower)) {
+    intentScores.duplicate_target += 0.85
+  }
+  if (/\b(rename|relabel|change the text of|change the title of)\b.+\bto\b/i.test(lower)) {
+    intentScores.rename_target += 0.86
+  }
+  if (/\b(frame all|wrap .* in a frame|enclose .* in a frame|create a frame around)\b/i.test(lower)) {
+    intentScores.group_frame += 0.85
+  }
+  if (/\b(in a circle|radial ring|distribute .* evenly|space .* out)\b/i.test(lower)) {
+    intentScores.distribute_shapes += 0.84
   }
   if (/\b(connect|link|arrow from|point|wire)\b.+\b(to|with|into)\b/i.test(lower)) {
-    intentScores.connect_shapes += 0.8
+    intentScores.connect_shapes += 0.82
   }
   if (/\b(sticky note|post-it|post it|memo|note saying|note about)\b/i.test(lower)) {
-    intentScores.create_note += 0.75
+    intentScores.create_note += 0.78
   }
-  if (/\b(title|heading|banner|text saying|write text|big label)\b/i.test(lower)) {
-    intentScores.create_text += 0.72
+  if (/\b(title|heading|banner|text saying|write text|big label)\b/i.test(lower) && !/\brename\b/i.test(lower)) {
+    intentScores.create_text += 0.74
   }
   if (
-    /\b(architecture diagram|flowchart|flow chart|mind ?map|kanban|2x2|two by two|matrix|roadmap|timeline|diagram|pipeline|brainstorm cluster)\b/i.test(
+    /\b(architecture diagram|flowchart|flow chart|mind ?map|kanban|2x2|two by two|matrix|roadmap|timeline|diagram|pipeline|event[- ]?driven|mesh|c4|funnel|user journey|rag)\b/i.test(
       lower
     )
   ) {
-    intentScores.generate_layout += 0.82
+    intentScores.generate_layout += 0.83
   }
   if (
-    /\b(theme|aesthetic|vibe|palette|blueprint|cyberpunk|neon|editorial|sketchbook|nordic|minimalist|botanical|forest|executive|dark mode|light mode)\b/i.test(
+    /\b(theme|aesthetic|vibe|palette|blueprint|cyberpunk|neon|editorial|sketchbook|nordic|minimalist|botanical|forest|executive|bauhaus|tokyo midnight|solarized|dark mode|light mode)\b/i.test(
       lower
     ) &&
     !/\b(draw a|add a|create a)\s+(box|node|circle|rectangle|diamond)\b/i.test(lower)
   ) {
-    intentScores.apply_theme += 0.78
+    intentScores.apply_theme += 0.8
   }
   if (/\b(harmonize|critique|vision align|polish the design|auto balance|visual harmony)\b/i.test(lower)) {
-    intentScores.vision_harmonize += 0.85
+    intentScores.vision_harmonize += 0.86
   }
   if (/\b(delete|remove|erase|drop|get rid of)\b/i.test(lower) && !/\b(all|everything|canvas)\b/i.test(lower)) {
     intentScores.delete_target += 0.78
   }
-  if (/\b(move|shift|nudge|drag|reposition|put the)\b/i.test(lower)) {
-    intentScores.move_target += 0.75
+  if (/\b(move|shift|nudge|drag|reposition|put the|place the)\b/i.test(lower)) {
+    intentScores.move_target += 0.76
   }
   if (/\b(bigger|smaller|wider|taller|scale|resize|enlarge|shrink)\b/i.test(lower)) {
     intentScores.resize_target += 0.78
   }
-  if (/\b(align|distribute|tidy|stack|organize|arrange)\b/i.test(lower)) {
+  if (/\b(align|tidy|stack|organize|arrange .* in a (?:row|column|grid))\b/i.test(lower)) {
     intentScores.align_shapes += 0.78
   }
-  if (/\b(color|recolor|change the .* to|make the .* (?:blue|red|green|yellow|orange|violet|purple|cyan|pink|white|black|grey|solid|dashed|dotted))\b/i.test(lower)) {
-    intentScores.style_target += 0.76
-  }
   if (
-    /\b(draw|create|add|put|drop|place|spawn)\b.*\b(box|rectangle|circle|oval|diamond|cloud|hexagon|star|triangle|trapezoid|node|card|service|database|gateway|actor|shape)\b/i.test(
+    /\b(color|recolor|change the .* to|make the .* (?:blue|red|green|yellow|orange|violet|purple|cyan|pink|white|black|grey|solid|dashed|dotted))\b/i.test(
       lower
     )
   ) {
-    intentScores.create_shape += 0.75
+    intentScores.style_target += 0.77
+  }
+  if (
+    /\b(draw|create|add|put|drop|place|spawn)\b.*\b(box|rectangle|circle|oval|diamond|cloud|hexagon|star|triangle|trapezoid|rhombus|checkbox|heart|node|card|service|database|gateway|actor|shape)\b/i.test(
+      lower
+    )
+  ) {
+    intentScores.create_shape += 0.76
   }
 
-  let bestIntent: CommandIntentSpec['id'] = 'create_shape'
+  let bestIntent: CommandIntentId = 'create_shape'
   let bestScore = -1
   for (const spec of COMMAND_INTENTS) {
     const sc = intentScores[spec.id] ?? 0
@@ -405,7 +446,6 @@ export function routeVoiceCommand(
   const modelUsed = denseScores?.modelUsed ?? 'google/embeddinggemma-2 (hybrid-router)'
   const latencyMs = Number((denseScores?.latencyMs ?? performance.now() - t0).toFixed(1))
 
-  // 2. Build intent-specific payload
   if (bestIntent === 'apply_theme') {
     let bestTheme = DESIGN_THEMES[0]!
     let bestThemeScore = -1
@@ -467,7 +507,11 @@ export function routeVoiceCommand(
 
     const resolvedFrom = resolveBestTarget(fromQuery, canvasShapes, denseScores?.sourceTargetScores)
     const remainingShapes = canvasShapes.filter((s) => s.id !== resolvedFrom.shape?.id)
-    const resolvedTo = resolveBestTarget(toQuery, remainingShapes.length ? remainingShapes : canvasShapes, denseScores?.destTargetScores)
+    const resolvedTo = resolveBestTarget(
+      toQuery,
+      remainingShapes.length ? remainingShapes : canvasShapes,
+      denseScores?.destTargetScores
+    )
 
     return {
       intent: 'connect_shapes',
@@ -504,7 +548,6 @@ export function routeVoiceCommand(
           bestArch = arch
         }
       }
-      // Explicit geometric overrides if spoken directly
       if (/\b(cloud)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'cloud') ?? bestArch
       else if (/\b(diamond|decision)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'diamond') ?? bestArch
       else if (/\b(circle|ellipse|round)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'ellipse') ?? bestArch
@@ -513,9 +556,14 @@ export function routeVoiceCommand(
       else if (/\b(hexagon|engine|model)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'hexagon') ?? bestArch
       else if (/\b(star|milestone)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'star') ?? bestArch
       else if (/\b(triangle|warning|alert)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'triangle') ?? bestArch
+      else if (/\b(checkbox|check-box|check)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'check-box') ?? bestArch
+      else if (/\b(heart|delight|favorite)\b/i.test(lower)) bestArch = SHAPE_ARCHETYPES.find((a) => a.geo === 'heart') ?? bestArch
     }
 
-    const label = extractCleanLabel(clean, bestIntent === 'create_note' ? 'Quick Note' : bestArch.title.split('/')[0]!.trim())
+    const label = extractCleanLabel(
+      clean,
+      bestIntent === 'create_note' ? 'Quick Note' : bestArch.title.split('/')[0]!.trim()
+    )
     const color = extractSpokenColor(clean) ?? bestArch.defaultColor
     const fill = extractSpokenFill(clean) ?? bestArch.defaultFill
     const dash = extractSpokenDash(clean)
@@ -548,23 +596,169 @@ export function routeVoiceCommand(
     }
   }
 
-  if (bestIntent === 'style_target' || bestIntent === 'move_target' || bestIntent === 'resize_target' || bestIntent === 'delete_target') {
+  if (bestIntent === 'rename_target') {
+    const m = clean.match(/\b(?:rename|relabel|change the (?:text|title|label) of)\s+(?:the\s+)?(.+?)\s+to\s+["']?([^,.!?"]+)["']?$/i)
+    const targetQuery = m?.[1]?.trim() || clean
+    const newLabel = m?.[2] ? formatLabelCase(m[2]) : 'Updated Node'
+    const resolved = resolveBestTarget(targetQuery, canvasShapes, denseScores?.targetScores)
+    return {
+      intent: 'rename_target',
+      confidence,
+      utterance: clean,
+      summary: `Renamed "${resolved.shape?.label ?? targetQuery}" → "${newLabel}"`,
+      modelUsed,
+      latencyMs,
+      targetOp: {
+        targetQuery,
+        targetShapeId: resolved.shape?.id,
+        targetLabel: resolved.shape?.label,
+        targetSimilarity: resolved.similarity,
+        newLabel,
+      },
+    }
+  }
+
+  if (bestIntent === 'duplicate_target') {
+    const targetQuery = clean.replace(/^(?:please\s+)?(?:duplicate|clone|make a copy of|copy)\s+(?:the\s+)?/i, '').trim()
+    const resolved = resolveBestTarget(targetQuery || clean, canvasShapes, denseScores?.targetScores)
+    return {
+      intent: 'duplicate_target',
+      confidence,
+      utterance: clean,
+      summary: `Duplicated "${resolved.shape?.label ?? 'latest shape'}"`,
+      modelUsed,
+      latencyMs,
+      targetOp: {
+        targetQuery: targetQuery || clean,
+        targetShapeId: resolved.shape?.id,
+        targetLabel: resolved.shape?.label,
+        targetSimilarity: resolved.similarity,
+      },
+    }
+  }
+
+  if (bestIntent === 'highlight_target') {
+    const targetQuery = clean
+      .replace(/^(?:please\s+)?(?:focus on|spotlight|zoom to|find|locate)\s+(?:the\s+)?/i, '')
+      .trim()
+    const resolved = resolveBestTarget(targetQuery || clean, canvasShapes, denseScores?.targetScores)
+    return {
+      intent: 'highlight_target',
+      confidence,
+      utterance: clean,
+      summary: `Focused camera on "${resolved.shape?.label ?? targetQuery}"`,
+      modelUsed,
+      latencyMs,
+      targetOp: {
+        targetQuery: targetQuery || clean,
+        targetShapeId: resolved.shape?.id,
+        targetLabel: resolved.shape?.label,
+        targetSimilarity: resolved.similarity,
+      },
+    }
+  }
+
+  if (bestIntent === 'swap_positions') {
+    const m = clean.match(
+      /\b(?:swap|exchange|trade positions of|switch the positions of)\s+(?:the\s+)?(.+?)\s+(?:and|with)\s+(?:the\s+)?(.+)$/i
+    )
+    const q1 = m?.[1]?.trim() || clean
+    const q2 = m?.[2]?.trim() || clean
+    const r1 = resolveBestTarget(q1, canvasShapes, denseScores?.sourceTargetScores)
+    const rem = canvasShapes.filter((s) => s.id !== r1.shape?.id)
+    const r2 = resolveBestTarget(q2, rem.length ? rem : canvasShapes, denseScores?.destTargetScores)
+    return {
+      intent: 'swap_positions',
+      confidence,
+      utterance: clean,
+      summary: `Swapped "${r1.shape?.label ?? q1}" ↔ "${r2.shape?.label ?? q2}"`,
+      modelUsed,
+      latencyMs,
+      targetOp: {
+        targetQuery: q1,
+        targetShapeId: r1.shape?.id,
+        targetLabel: r1.shape?.label,
+        secondTargetShapeId: r2.shape?.id,
+        secondTargetLabel: r2.shape?.label,
+      },
+    }
+  }
+
+  if (bestIntent === 'group_frame') {
+    const m = clean.match(/\b(?:as|called|named|titled)\s+["']?([^,.!?"]+)["']?$/i)
+    const frameLabel = m?.[1] ? formatLabelCase(m[1]) : 'Subsystem Cluster'
+    return {
+      intent: 'group_frame',
+      confidence,
+      utterance: clean,
+      summary: `Enclosed shapes in frame "${frameLabel}"`,
+      modelUsed,
+      latencyMs,
+      frameOp: {
+        frameLabel,
+      },
+    }
+  }
+
+  if (bestIntent === 'distribute_shapes') {
+    const mode: 'circle' | 'spread' = /\b(circle|ring|radial)\b/i.test(lower) ? 'circle' : 'spread'
+    return {
+      intent: 'distribute_shapes',
+      confidence,
+      utterance: clean,
+      summary: mode === 'circle' ? 'Arranged shapes into a radial ring' : 'Distributed shapes with generous spacing',
+      modelUsed,
+      latencyMs,
+      alignment: mode,
+    }
+  }
+
+  if (
+    bestIntent === 'style_target' ||
+    bestIntent === 'move_target' ||
+    bestIntent === 'resize_target' ||
+    bestIntent === 'delete_target'
+  ) {
     const applyToAll = /\b(all shapes|everything|every node|all nodes|every shape)\b/i.test(lower)
-    const resolved = resolveBestTarget(clean, canvasShapes, denseScores?.targetScores)
+
+    // Check for relative placement in move_target: "put X below Y" / "move X above Y" / "place X to the right of Y"
+    let relativeToShapeId: string | undefined
+    let relativePlacement: 'above' | 'below' | 'left' | 'right' | undefined
+    let targetQuery = clean
+
+    if (bestIntent === 'move_target') {
+      const relMatch = clean.match(
+        /\b(?:move|put|place|shift|position)\s+(?:the\s+)?(.+?)\s+(above|below|under|beneath|to the left of|to the right of|left of|right of)\s+(?:the\s+)?(.+)$/i
+      )
+      if (relMatch && relMatch[1] && relMatch[2] && relMatch[3]) {
+        targetQuery = relMatch[1].trim()
+        const relDir = relMatch[2].toLowerCase()
+        const anchorQuery = relMatch[3].trim()
+        const anchorResolved = resolveBestTarget(anchorQuery, canvasShapes)
+        relativeToShapeId = anchorResolved.shape?.id
+        if (relDir.includes('above')) relativePlacement = 'above'
+        else if (relDir.includes('below') || relDir.includes('under') || relDir.includes('beneath'))
+          relativePlacement = 'below'
+        else if (relDir.includes('left')) relativePlacement = 'left'
+        else relativePlacement = 'right'
+      }
+    }
+
+    const resolved = resolveBestTarget(targetQuery, canvasShapes, denseScores?.targetScores)
 
     let dx = 0
     let dy = 0
-    if (bestIntent === 'move_target') {
-      if (/\b(left)\b/i.test(lower)) dx = -220
-      if (/\b(right)\b/i.test(lower)) dx = 220
-      if (/\b(up|higher|above)\b/i.test(lower)) dy = -180
-      if (/\b(down|lower|below)\b/i.test(lower)) dy = 180
-      if (dx === 0 && dy === 0) dx = 180
+    if (bestIntent === 'move_target' && !relativeToShapeId) {
+      if (/\b(left)\b/i.test(lower)) dx = -240
+      if (/\b(right)\b/i.test(lower)) dx = 240
+      if (/\b(up|higher|above)\b/i.test(lower)) dy = -190
+      if (/\b(down|lower|below)\b/i.test(lower)) dy = 190
+      if (dx === 0 && dy === 0) dx = 200
     }
 
     let scaleFactor = 1.0
     if (bestIntent === 'resize_target') {
-      scaleFactor = /\b(smaller|tiny|shrink|compact|down)\b/i.test(lower) ? 0.72 : 1.38
+      scaleFactor = /\b(smaller|tiny|shrink|compact|down)\b/i.test(lower) ? 0.74 : 1.36
     }
 
     return {
@@ -577,7 +771,7 @@ export function routeVoiceCommand(
       modelUsed,
       latencyMs,
       targetOp: {
-        targetQuery: clean,
+        targetQuery,
         targetShapeId: resolved.shape?.id,
         targetLabel: resolved.shape?.label,
         targetSimilarity: resolved.similarity,
@@ -589,6 +783,8 @@ export function routeVoiceCommand(
         size: extractSpokenSize(clean),
         dx,
         dy,
+        relativeToShapeId,
+        relativePlacement,
         scaleFactor,
       },
     }
@@ -612,13 +808,21 @@ export function routeVoiceCommand(
   }
 
   if (bestIntent === 'camera_control') {
-    const cameraOp: 'zoom_in' | 'zoom_out' | 'fit' | 'center' = /\b(zoom in|closer)\b/i.test(lower)
+    const cameraOp = /\b(zoom in|closer)\b/i.test(lower)
       ? 'zoom_in'
       : /\b(zoom out|further|back)\b/i.test(lower)
         ? 'zoom_out'
-        : /\b(center)\b/i.test(lower)
-          ? 'center'
-          : 'fit'
+        : /\b(pan left)\b/i.test(lower)
+          ? 'pan_left'
+          : /\b(pan right)\b/i.test(lower)
+            ? 'pan_right'
+            : /\b(pan up)\b/i.test(lower)
+              ? 'pan_up'
+              : /\b(pan down)\b/i.test(lower)
+                ? 'pan_down'
+                : /\b(center)\b/i.test(lower)
+                  ? 'center'
+                  : 'fit'
     return {
       intent: 'camera_control',
       confidence,
@@ -661,5 +865,61 @@ export function routeVoiceCommand(
     summary: 'Cleared entire canvas',
     modelUsed,
     latencyMs,
+  }
+}
+
+/**
+ * Routes single or multi-clause compound utterances with anaphora ("it", "that") resolution across clauses.
+ */
+export function routeVoiceCommand(
+  utterance: string,
+  canvasShapes: CanvasShapeSummary[] = [],
+  denseScores?: SemanticScoresPayload
+): CanvasActionCommand {
+  const clauses = splitCompoundUtterance(utterance)
+  if (clauses.length <= 1) {
+    return routeSingleClauseCommand(utterance, canvasShapes, denseScores)
+  }
+
+  const workingShapes = [...canvasShapes]
+  const steps: CanvasActionCommand[] = []
+  let lastCreatedLabel: string | undefined
+
+  for (let i = 0; i < clauses.length; i++) {
+    let clause = clauses[i]!
+    if (lastCreatedLabel) {
+      clause = clause
+        .replace(/\b(connect|link|wire|point|move|color|make|scale|resize|rename)\s+(it|that|the new node|the new box)\b/gi, `$1 ${lastCreatedLabel}`)
+        .replace(/\bto\s+(it|that|the new node|the new box)\b/gi, `to ${lastCreatedLabel}`)
+    }
+
+    const stepCmd = routeSingleClauseCommand(clause, workingShapes, i === 0 ? denseScores : undefined)
+    steps.push(stepCmd)
+
+    if (
+      (stepCmd.intent === 'create_shape' || stepCmd.intent === 'create_note' || stepCmd.intent === 'create_text') &&
+      stepCmd.shape
+    ) {
+      lastCreatedLabel = stepCmd.shape.label
+      workingShapes.push({
+        id: `__virtual_${i}`,
+        type: stepCmd.shape.archetype.kind,
+        geo: stepCmd.shape.archetype.geo,
+        label: stepCmd.shape.label,
+        x: 0,
+        y: 0,
+        w: stepCmd.shape.archetype.width,
+        h: stepCmd.shape.archetype.height,
+        color: stepCmd.shape.color,
+      })
+    }
+  }
+
+  const primary = steps[0]!
+  return {
+    ...primary,
+    utterance: utterance.trim(),
+    summary: steps.map((s) => s.summary).join(' · '),
+    steps,
   }
 }
