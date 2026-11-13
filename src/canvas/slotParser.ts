@@ -16,6 +16,7 @@ export interface ParsedSlots {
   connectAll: boolean;
   sourceHint: string | null;
   targetHint: string | null;
+  edgeLabel: string | null;
   direction: 'left' | 'right' | 'up' | 'down' | 'center' | null;
   moveDistance: 'small' | 'normal' | 'far';
   anchor: SpatialAnchor | null;
@@ -164,10 +165,20 @@ export function hasExplicitUndoConsent(rawText: string, words: WordWithConfidenc
 export function extractEntityPairHints(raw: string): {
   sourceHint: string | null;
   targetHint: string | null;
+  edgeLabel: string | null;
   relation: SpatialRelation | null;
   isSwap: boolean;
 } {
-  const cleaned = raw.replace(/[.?!]+$/g, '').trim();
+  let cleaned = raw.replace(/[.?!]+$/g, '').trim();
+  let edgeLabel: string | null = null;
+
+  const edgeLblMatch = cleaned.match(
+    /\s+(?:with\s+label|labeled|labelled|saying|reading|via)\s+["']?([^,.]+?)["']?$/i,
+  );
+  if (edgeLblMatch && edgeLblMatch[1]) {
+    edgeLabel = titleCaseLabel(edgeLblMatch[1]);
+    cleaned = cleaned.slice(0, edgeLblMatch.index).trim();
+  }
 
   // 1. Swap patterns: "swap X and Y", "switch X with Y"
   const swapMatch = cleaned.match(
@@ -177,6 +188,7 @@ export function extractEntityPairHints(raw: string): {
     return {
       sourceHint: swapMatch[1].trim(),
       targetHint: swapMatch[2].trim(),
+      edgeLabel: null,
       relation: null,
       isSwap: true,
     };
@@ -197,6 +209,7 @@ export function extractEntityPairHints(raw: string): {
     return {
       sourceHint: relMatch[1].trim(),
       targetHint: relMatch[3].trim(),
+      edgeLabel: null,
       relation,
       isSwap: false,
     };
@@ -210,6 +223,7 @@ export function extractEntityPairHints(raw: string): {
     return {
       sourceHint: orbitMatch[1].trim(),
       targetHint: orbitMatch[2].trim(),
+      edgeLabel: null,
       relation: null,
       isSwap: false,
     };
@@ -217,7 +231,7 @@ export function extractEntityPairHints(raw: string): {
 
   // 4. Connection patterns: "connect X to Y", "arrow from X to Y"
   const connPatterns = [
-    /(?:connect|wire|link|point|arrow\s+from|join)\s+(?:the\s+)?(.+?)\s+(?:to|into|with|and|towards?)\s+(?:the\s+)?(.+)$/i,
+    /(?:connect|wire|link|point|draw\s+an?\s+arrow\s+from|arrow\s+from|join)\s+(?:the\s+)?(.+?)\s+(?:to|into|with|and|towards?)\s+(?:the\s+)?(.+)$/i,
     /from\s+(?:the\s+)?(.+?)\s+to\s+(?:the\s+)?(.+)$/i,
   ];
   for (const re of connPatterns) {
@@ -226,12 +240,12 @@ export function extractEntityPairHints(raw: string): {
       const s = m[1].trim();
       const t = m[2].trim();
       if (!/^(them|all|everything|these|those)$/i.test(s)) {
-        return { sourceHint: s, targetHint: t, relation: null, isSwap: false };
+        return { sourceHint: s, targetHint: t, edgeLabel, relation: null, isSwap: false };
       }
     }
   }
 
-  return { sourceHint: null, targetHint: null, relation: null, isSwap: false };
+  return { sourceHint: null, targetHint: null, edgeLabel, relation: null, isSwap: false };
 }
 
 function titleCaseLabel(s: string): string {
@@ -299,7 +313,7 @@ export function parseVoiceSlots(rawText: string, ghostText = ''): ParsedSlots {
     /\b(connect|link|wire)\s+(them(\s+all)?|everything|all(\s+of\s+them)?|these|the\s+shapes|in\s+order|in\s+sequence)\b/i.test(
       lower,
     );
-  const { sourceHint, targetHint, relation: spatialRelation, isSwap } = extractEntityPairHints(clean);
+  const { sourceHint, targetHint, edgeLabel, relation: spatialRelation, isSwap } = extractEntityPairHints(clean);
 
   // Spatial anchors & directions
   let anchor: SpatialAnchor | null = null;
@@ -395,8 +409,19 @@ export function parseVoiceSlots(rawText: string, ghostText = ''): ParsedSlots {
 
   // Crisp lexical intent routing
   let lexicalIntent: IntentKind | null = null;
-  if (isSwap) {
+  if (
+    /\b(harmoni[sz]e|critique|curate|auto\s*style|balance\s+(?:the\s+)?(?:design|composition|canvas|layout)|polish\s+(?:the\s+)?(?:canvas|design|diagram))\b/i.test(
+      lower,
+    )
+  ) {
+    lexicalIntent = 'vision_harmonize';
+  } else if (isSwap) {
     lexicalIntent = 'transform_swap';
+  } else if (
+    /\b(?:connect|wire|link|draw\s+an?\s+arrow\s+from|arrow\s+from)\b/i.test(lower) &&
+    (sourceHint !== null || connectAll)
+  ) {
+    lexicalIntent = 'connect_shapes';
   } else if (spatialRelation) {
     lexicalIntent = 'transform_move_relative';
   } else if (animationKind === 'stop') {
@@ -449,6 +474,7 @@ export function parseVoiceSlots(rawText: string, ghostText = ''): ParsedSlots {
     connectAll,
     sourceHint,
     targetHint,
+    edgeLabel,
     direction,
     moveDistance,
     anchor,

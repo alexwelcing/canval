@@ -157,7 +157,15 @@ export type CanvasSyscall =
       op: 'STOP_ANIM';
       targets: string[];
     }
-  | { op: 'CONNECT'; fromReg?: string | null; toReg?: string | null; all?: boolean }
+  | {
+      op: 'CONNECT';
+      fromReg?: string | null;
+      toReg?: string | null;
+      fromLabel?: string | null;
+      toLabel?: string | null;
+      edgeLabel?: string | null;
+      all?: boolean;
+    }
   | { op: 'STYLE_COLOR'; targets: string[]; color?: TLDefaultColorStyle | null }
   | { op: 'STYLE_SURFACE'; targets: string[] }
   | { op: 'SCALE'; targets: string[]; factor: number }
@@ -169,9 +177,22 @@ export type CanvasSyscall =
   | { op: 'DELETE'; targets: string[] }
   | { op: 'CLEAR' }
   | { op: 'AESTHETIC'; aestheticId?: string }
+  | { op: 'HARMONIZE'; goalPrompt?: string }
   | { op: 'UNDO' }
   | { op: 'REDO' }
   | { op: 'CAMERA'; action: 'zoom_in' | 'zoom_out' | 'fit' };
+
+export interface VisionHarmonizePayload {
+  editionId: string;
+  critiqueId: string;
+  critiqueTitle: string;
+  critiqueDescription: string;
+  shouldUntangle: boolean;
+  themeScores: Record<string, number>;
+  critiqueScores: Record<string, number>;
+  modelUsed: string;
+  latencyMs: number;
+}
 
 export interface StateComputerDecision {
   requestId: number;

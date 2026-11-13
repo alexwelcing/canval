@@ -22,6 +22,7 @@ import type {
   SemanticResolution,
   SpatialAnchor,
   StateComputerDecision,
+  VisionHarmonizePayload,
 } from '../types/protocol';
 import { CanvasAnimationEngine } from './animationEngine';
 import {
@@ -118,6 +119,7 @@ export interface DirectorResult {
   summary: string;
   opcode?: string;
   changedAesthetic?: AestheticEdition;
+  requestHarmonizeGoal?: string;
 }
 
 export class CanvasDirector {
@@ -342,6 +344,79 @@ export class CanvasDirector {
     return { cx, cy, isPortrait, vw: bounds.w, vh: bounds.h };
   }
 
+  private inferArchetypeForLabel(label: string): ShapeArchetype {
+    const l = label.toLowerCase();
+    const byId = (id: string) => SHAPE_ARCHETYPES.find((a) => a.id === id) ?? SHAPE_ARCHETYPES[0];
+    if (/\b(db|database|postgres|sql|redis|cache|store|vector|bucket|storage|warehouse|queue)\b/.test(l)) {
+      return byId('arch-database');
+    }
+    if (/\b(gateway|engine|worker|processor|model|kernel|api|service|server)\b/.test(l)) {
+      return byId('arch-hexagon');
+    }
+    if (/\b(cloud|cdn|internet|aws|gcp|edge|network)\b/.test(l)) {
+      return byId('arch-cloud');
+    }
+    if (/\b(client|user|mobile|phone|browser|actor|session|app)\b/.test(l)) {
+      return byId('arch-pill');
+    }
+    if (/\b(decision|router|auth|check|gate|branch|guard)\b/.test(l)) {
+      return byId('arch-diamond');
+    }
+    if (/\b(note|memo|sticky)\b/.test(l)) {
+      return byId('arch-sticky');
+    }
+    return SHAPE_ARCHETYPES[0];
+  }
+
+  public applyVisionHarmonize(
+    editor: Editor,
+    harmony: VisionHarmonizePayload,
+    onEditionChange: (ed: AestheticEdition) => void,
+  ): DirectorResult {
+    const matchedEd =
+      AESTHETIC_EDITIONS.find((e) => e.id === harmony.editionId) ?? AESTHETIC_EDITIONS[0];
+    onEditionChange(matchedEd);
+    this.applyAestheticToCanvas(editor, matchedEd);
+
+    const unlocked = editor
+      .getCurrentPageShapes()
+      .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && !s.meta?.locked);
+
+    if (harmony.shouldUntangle && unlocked.length >= 2) {
+      editor.markHistoryStoppingPoint('voice-harmonize');
+      const { cx, cy, isPortrait } = this.getViewportAnchorPoint(editor, null, false);
+      const cols = unlocked.length <= 3 ? (isPortrait ? 1 : unlocked.length) : Math.ceil(Math.sqrt(unlocked.length));
+      const rows = Math.ceil(unlocked.length / cols);
+      const gapX = matchedEd.tokens.gapX + 18;
+      const gapY = matchedEd.tokens.gapY + 14;
+
+      editor.updateShapes(
+        unlocked.map((s, idx) => {
+          const b = editor.getShapePageBounds(s.id);
+          const w = b ? b.w : 190;
+          const h = b ? b.h : 105;
+          const col = idx % cols;
+          const row = Math.floor(idx / cols);
+          const x = cx + (col - (cols - 1) / 2) * gapX - w / 2;
+          const y = cy + (row - (rows - 1) / 2) * gapY - h / 2;
+          return { id: s.id, type: s.type, x, y };
+        }),
+      );
+    }
+
+    const allIds = editor
+      .getCurrentPageShapes()
+      .filter((s) => !s.meta?.speculative)
+      .map((s) => s.id);
+    this.gentlyFrameShapes(editor, allIds);
+
+    return {
+      summary: `${matchedEd.catalogueNumber} · ${harmony.critiqueTitle}`,
+      opcode: 'HARMONIZE',
+      changedAesthetic: matchedEd,
+    };
+  }
+
   private createBoundArrow(
     editor: Editor,
     fromId: TLShapeId,
@@ -349,6 +424,7 @@ export class CanvasDirector {
     edition: AestheticEdition,
     speculative: boolean,
     utteranceId: number,
+    edgeLabel?: string | null,
   ): void {
     const fromBounds = editor.getShapePageBounds(fromId);
     const toBounds = editor.getShapePageBounds(toId);
@@ -365,6 +441,8 @@ export class CanvasDirector {
       props: {
         kind: edition.tokens.arrowKind,
         color: edition.tokens.connectorColor,
+        labelColor: edition.tokens.primaryColor,
+        font: edition.tokens.font,
         dash: speculative ? 'dashed' : edition.tokens.dash === 'dashed' ? 'solid' : edition.tokens.dash,
         size: edition.tokens.size,
         arrowheadStart: 'none',
@@ -372,6 +450,7 @@ export class CanvasDirector {
         bend: edition.tokens.arrowKind === 'arc' ? edition.tokens.arrowBend : 0,
         start: { x: 0, y: 0 },
         end: { x: toBounds.midX - fromBounds.midX, y: toBounds.midY - fromBounds.midY },
+        ...(edgeLabel ? { richText: toRichText(edgeLabel) } : {}),
       },
     });
 
@@ -1081,21 +1160,108 @@ export class CanvasDirector {
         return { summary: 'Motion stilled', opcode: rawOpcodeLine };
       }
 
+      case 'HARMONIZE': {
+        return {
+          summary: 'Curating composition…',
+          opcode: rawOpcodeLine,
+          requestHarmonizeGoal: syscall.goalPrompt ?? res.rawText,
+        };
+      }
+
       case 'CONNECT': {
         const allNodes = editor
           .getCurrentPageShapes()
           .filter((s) => !s.meta?.speculative && s.type !== 'arrow');
-        if (allNodes.length < 2) return null;
 
         editor.markHistoryStoppingPoint('voice-connect');
-        if (!syscall.all && syscall.fromReg && syscall.toReg) {
-          const fromS = this.findShapeByReg(editor, syscall.fromReg);
-          const toS = this.findShapeByReg(editor, syscall.toReg);
+        const { cx, cy, isPortrait } = this.getViewportAnchorPoint(editor, null, true);
+
+        if (!syscall.all && (syscall.fromReg || syscall.toReg || syscall.fromLabel || syscall.toLabel)) {
+          let fromS = this.findShapeByReg(editor, syscall.fromReg);
+          let toS = this.findShapeByReg(editor, syscall.toReg);
+          const spawnedIds: TLShapeId[] = [];
+
+          if (!fromS && syscall.fromLabel) {
+            const arch = this.inferArchetypeForLabel(syscall.fromLabel);
+            const sx = toS
+              ? (editor.getShapePageBounds(toS.id)?.midX ?? cx) - (isPortrait ? 0 : activeEdition.tokens.gapX)
+              : cx - (isPortrait ? 0 : activeEdition.tokens.gapX * 0.55);
+            const sy = toS
+              ? (editor.getShapePageBounds(toS.id)?.midY ?? cy) - (isPortrait ? activeEdition.tokens.gapY : 0)
+              : cy - (isPortrait ? activeEdition.tokens.gapY * 0.55 : 0);
+            const newId = this.spawnNode(editor, {
+              x: sx,
+              y: sy,
+              w: arch.w,
+              h: arch.h,
+              shapeType: arch.shapeType,
+              geo: arch.geo,
+              label: syscall.fromLabel,
+              role: arch.role,
+              colorOverride: null,
+              slots,
+              edition: activeEdition,
+              speculative: false,
+              utteranceId: res.utteranceId,
+            });
+            spawnedIds.push(newId);
+            fromS = editor.getShape(newId) ?? null;
+          }
+
+          if (!toS && syscall.toLabel) {
+            const arch = this.inferArchetypeForLabel(syscall.toLabel);
+            const fromB = fromS ? editor.getShapePageBounds(fromS.id) : null;
+            const dx = fromB
+              ? fromB.midX + (isPortrait ? 0 : Math.max(fromB.w / 2 + arch.w / 2 + 72, activeEdition.tokens.gapX))
+              : cx + (isPortrait ? 0 : activeEdition.tokens.gapX * 0.55);
+            const dy = fromB
+              ? fromB.midY + (isPortrait ? Math.max(fromB.h / 2 + arch.h / 2 + 64, activeEdition.tokens.gapY) : 0)
+              : cy + (isPortrait ? activeEdition.tokens.gapY * 0.55 : 0);
+            const newId = this.spawnNode(editor, {
+              x: dx,
+              y: dy,
+              w: arch.w,
+              h: arch.h,
+              shapeType: arch.shapeType,
+              geo: arch.geo,
+              label: syscall.toLabel,
+              role: arch.role === 'primary' ? 'accent' : arch.role,
+              colorOverride: null,
+              slots,
+              edition: activeEdition,
+              speculative: false,
+              utteranceId: res.utteranceId,
+            });
+            spawnedIds.push(newId);
+            toS = editor.getShape(newId) ?? null;
+          }
+
           if (fromS && toS && fromS.id !== toS.id) {
-            this.createBoundArrow(editor, fromS.id, toS.id, activeEdition, false, res.utteranceId);
-            return { summary: `Connected ${syscall.fromReg} → ${syscall.toReg}`, opcode: rawOpcodeLine };
+            this.createBoundArrow(
+              editor,
+              fromS.id,
+              toS.id,
+              activeEdition,
+              false,
+              res.utteranceId,
+              syscall.edgeLabel,
+            );
+            if (spawnedIds.length > 0) {
+              this.lastCreatedIds = [fromS.id, toS.id];
+              this.gentlyFrameShapes(editor, [fromS.id, toS.id]);
+            }
+            const srcTag = syscall.fromLabel ?? syscall.fromReg ?? 'node';
+            const dstTag = syscall.toLabel ?? syscall.toReg ?? 'node';
+            return {
+              summary: syscall.edgeLabel
+                ? `Linked ${srcTag} → ${dstTag} (${syscall.edgeLabel})`
+                : `Connected ${srcTag} → ${dstTag}`,
+              opcode: rawOpcodeLine,
+            };
           }
         }
+
+        if (allNodes.length < 2) return null;
 
         const targets =
           this.lastCreatedIds.length >= 2
@@ -1105,7 +1271,15 @@ export class CanvasDirector {
                 .sort((a, b) => a.y - b.y || a.x - b.x)
                 .map((s) => s.id);
         for (let i = 0; i < targets.length - 1; i++) {
-          this.createBoundArrow(editor, targets[i], targets[i + 1], activeEdition, false, res.utteranceId);
+          this.createBoundArrow(
+            editor,
+            targets[i],
+            targets[i + 1],
+            activeEdition,
+            false,
+            res.utteranceId,
+            syscall.edgeLabel,
+          );
         }
         return { summary: `Connected ${targets.length} elements`, opcode: rawOpcodeLine };
       }

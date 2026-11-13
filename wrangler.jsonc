@@ -1,14 +1,14 @@
 {
-  "name": "canval",
+  "name": "cavals",
   "main": "worker/index.ts",
   "compatibility_date": "2025-10-01",
-  "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
-  },
-  "ai": {
-    "binding": "AI"
+  "routes": [
+    {
+      "pattern": "cavals.alexwelcing.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "CLOUD_RUN_ORIGIN": "https://cavals-edbhtpvina-uc.a.run.app"
   }
 }

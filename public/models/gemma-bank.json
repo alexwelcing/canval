@@ -158,321 +158,351 @@
     },
     {
       "index": 25,
+      "group": "intent",
+      "id": "intent-vision-harmonize",
+      "subkind": "vision_harmonize"
+    },
+    {
+      "index": 26,
       "group": "aesthetic",
       "id": "bauhaus-archive",
       "subkind": "WEIMAR WERKBUND"
     },
     {
-      "index": 26,
+      "index": 27,
       "group": "aesthetic",
       "id": "kyoto-washi",
       "subkind": "KYOTO SUMI & WASHI"
     },
     {
-      "index": 27,
+      "index": 28,
       "group": "aesthetic",
       "id": "swiss-grid",
       "subkind": "BASEL KUNSTHALLE"
     },
     {
-      "index": 28,
+      "index": 29,
       "group": "aesthetic",
       "id": "cyanotype-blueprint",
       "subkind": "ATELIER CYANOTYPE"
     },
     {
-      "index": 29,
+      "index": 30,
       "group": "aesthetic",
       "id": "obsidian-monolith",
       "subkind": "OBSIDIAN MONOLITH"
     },
     {
-      "index": 30,
+      "index": 31,
       "group": "aesthetic",
       "id": "travertine-editorial",
       "subkind": "MILAN TRAVERTINE"
     },
     {
-      "index": 31,
+      "index": 32,
       "group": "aesthetic",
       "id": "chalkboard-atelier",
       "subkind": "ECOLE BLACKBOARD"
     },
     {
-      "index": 32,
+      "index": 33,
       "group": "aesthetic",
       "id": "rams-industrial",
       "subkind": "KRONBERG INDUSTRIAL"
     },
     {
-      "index": 33,
+      "index": 34,
       "group": "blueprint",
       "id": "architecture",
       "subkind": "architecture"
     },
     {
-      "index": 34,
+      "index": 35,
       "group": "blueprint",
       "id": "flowchart",
       "subkind": "flowchart"
     },
     {
-      "index": 35,
+      "index": 36,
       "group": "blueprint",
       "id": "mindmap",
       "subkind": "mindmap"
     },
     {
-      "index": 36,
+      "index": 37,
       "group": "blueprint",
       "id": "kanban",
       "subkind": "kanban"
     },
     {
-      "index": 37,
+      "index": 38,
       "group": "blueprint",
       "id": "quadrant",
       "subkind": "quadrant"
     },
     {
-      "index": 38,
+      "index": 39,
       "group": "blueprint",
       "id": "timeline",
       "subkind": "timeline"
     },
     {
-      "index": 39,
+      "index": 40,
       "group": "blueprint",
       "id": "bento",
       "subkind": "bento"
     },
     {
-      "index": 40,
+      "index": 41,
       "group": "blueprint",
       "id": "row",
       "subkind": "row"
     },
     {
-      "index": 41,
+      "index": 42,
       "group": "blueprint",
       "id": "column",
       "subkind": "column"
     },
     {
-      "index": 42,
+      "index": 43,
       "group": "archetype",
       "id": "arch-card",
       "subkind": "geo"
     },
     {
-      "index": 43,
+      "index": 44,
       "group": "archetype",
       "id": "arch-circle",
       "subkind": "geo"
     },
     {
-      "index": 44,
+      "index": 45,
       "group": "archetype",
       "id": "arch-pill",
       "subkind": "geo"
     },
     {
-      "index": 45,
+      "index": 46,
       "group": "archetype",
       "id": "arch-diamond",
       "subkind": "geo"
     },
     {
-      "index": 46,
+      "index": 47,
       "group": "archetype",
       "id": "arch-hexagon",
       "subkind": "geo"
     },
     {
-      "index": 47,
+      "index": 48,
       "group": "archetype",
       "id": "arch-database",
       "subkind": "geo"
     },
     {
-      "index": 48,
+      "index": 49,
       "group": "archetype",
       "id": "arch-cloud",
       "subkind": "geo"
     },
     {
-      "index": 49,
+      "index": 50,
       "group": "archetype",
       "id": "arch-triangle",
       "subkind": "geo"
     },
     {
-      "index": 50,
+      "index": 51,
       "group": "archetype",
       "id": "arch-star",
       "subkind": "geo"
     },
     {
-      "index": 51,
+      "index": 52,
       "group": "archetype",
       "id": "arch-heart",
       "subkind": "geo"
     },
     {
-      "index": 52,
+      "index": 53,
       "group": "archetype",
       "id": "arch-sticky",
       "subkind": "note"
     },
     {
-      "index": 53,
+      "index": 54,
       "group": "archetype",
       "id": "arch-text",
       "subkind": "text"
     },
     {
-      "index": 54,
+      "index": 55,
       "group": "archetype",
       "id": "arch-frame",
       "subkind": "frame"
     },
     {
-      "index": 55,
+      "index": 56,
       "group": "color",
       "id": "col-black",
       "subkind": "black"
     },
     {
-      "index": 56,
+      "index": 57,
       "group": "color",
       "id": "col-grey",
       "subkind": "grey"
     },
     {
-      "index": 57,
+      "index": 58,
       "group": "color",
       "id": "col-white",
       "subkind": "white"
     },
     {
-      "index": 58,
+      "index": 59,
       "group": "color",
       "id": "col-red",
       "subkind": "red"
     },
     {
-      "index": 59,
+      "index": 60,
       "group": "color",
       "id": "col-light-red",
       "subkind": "light-red"
     },
     {
-      "index": 60,
+      "index": 61,
       "group": "color",
       "id": "col-orange",
       "subkind": "orange"
     },
     {
-      "index": 61,
+      "index": 62,
       "group": "color",
       "id": "col-yellow",
       "subkind": "yellow"
     },
     {
-      "index": 62,
+      "index": 63,
       "group": "color",
       "id": "col-green",
       "subkind": "green"
     },
     {
-      "index": 63,
+      "index": 64,
       "group": "color",
       "id": "col-light-green",
       "subkind": "light-green"
     },
     {
-      "index": 64,
+      "index": 65,
       "group": "color",
       "id": "col-blue",
       "subkind": "blue"
     },
     {
-      "index": 65,
+      "index": 66,
       "group": "color",
       "id": "col-light-blue",
       "subkind": "light-blue"
     },
     {
-      "index": 66,
+      "index": 67,
       "group": "color",
       "id": "col-violet",
       "subkind": "violet"
     },
     {
-      "index": 67,
+      "index": 68,
       "group": "color",
       "id": "col-light-violet",
       "subkind": "light-violet"
     },
     {
-      "index": 68,
+      "index": 69,
       "group": "animation",
       "id": "anim-float",
       "subkind": "float"
     },
     {
-      "index": 69,
+      "index": 70,
       "group": "animation",
       "id": "anim-orbit",
       "subkind": "orbit"
     },
     {
-      "index": 70,
+      "index": 71,
       "group": "animation",
       "id": "anim-pulse",
       "subkind": "pulse"
     },
     {
-      "index": 71,
+      "index": 72,
       "group": "animation",
       "id": "anim-spin",
       "subkind": "spin"
     },
     {
-      "index": 72,
+      "index": 73,
       "group": "animation",
       "id": "anim-bounce",
       "subkind": "bounce"
     },
     {
-      "index": 73,
+      "index": 74,
       "group": "animation",
       "id": "anim-wiggle",
       "subkind": "wiggle"
     },
     {
-      "index": 74,
+      "index": 75,
       "group": "animation",
       "id": "anim-pendulum",
       "subkind": "pendulum"
     },
     {
-      "index": 75,
+      "index": 76,
       "group": "animation",
       "id": "anim-figure8",
       "subkind": "figure8"
     },
     {
-      "index": 76,
+      "index": 77,
       "group": "animation",
       "id": "anim-drift",
       "subkind": "drift"
     },
     {
-      "index": 77,
+      "index": 78,
       "group": "animation",
       "id": "anim-stop",
       "subkind": "stop"
+    },
+    {
+      "index": 79,
+      "group": "critique",
+      "id": "balanced-hierarchy",
+      "subkind": "Balanced Visual Hierarchy"
+    },
+    {
+      "index": 80,
+      "group": "critique",
+      "id": "needs-accent-contrast",
+      "subkind": "Applied Curatorial Contrast"
+    },
+    {
+      "index": 81,
+      "group": "critique",
+      "id": "dense-cluster",
+      "subkind": "Untangled Dense Cluster"
+    },
+    {
+      "index": 82,
+      "group": "critique",
+      "id": "sparse-minimal",
+      "subkind": "Framed Minimalist Study"
     }
   ]
 }

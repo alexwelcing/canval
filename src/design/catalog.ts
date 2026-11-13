@@ -435,7 +435,8 @@ export type IntentKind =
   | 'history_redo'
   | 'camera_zoom_in'
   | 'camera_zoom_out'
-  | 'camera_fit';
+  | 'camera_fit'
+  | 'vision_harmonize';
 
 export interface IntentPrototype {
   id: string;
@@ -635,6 +636,14 @@ export const INTENT_PROTOTYPES: IntentPrototype[] = [
     kind: 'camera_fit',
     title: 'Fit all shapes into view or center camera on the artwork',
     exemplars: 'fit everything on screen, zoom to fit, center the view, show the whole diagram, frame everything',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-vision-harmonize',
+    kind: 'vision_harmonize',
+    title: 'Harmonize, critique, curate, or auto-style the visual composition and layout balance',
+    exemplars:
+      'harmonize the canvas, harmonize the design, critique the composition, curate the visual hierarchy, auto style this diagram, polish and balance the layout',
     speculativeSafe: false,
   },
 ];
@@ -999,5 +1008,43 @@ export const ANIMATION_PROTOTYPES: AnimationPrototype[] = [
     anim: 'stop',
     title: 'Stop animating, freeze motion, hold still, pause',
     exemplars: 'stop animating, freeze, pause motion, hold still, calm down, stop',
+  },
+];
+
+export interface CritiquePrototype {
+  id: 'balanced-hierarchy' | 'needs-accent-contrast' | 'dense-cluster' | 'sparse-minimal';
+  title: string;
+  description: string;
+  exemplars: string;
+}
+
+export const CRITIQUE_PROTOTYPES: CritiquePrototype[] = [
+  {
+    id: 'balanced-hierarchy',
+    title: 'Balanced Visual Hierarchy',
+    description: 'Proportioned studio composition with clear primary, secondary, and accent rhythm.',
+    exemplars:
+      'balanced visual hierarchy, clear primary secondary accent contrast, generous museum whitespace, well proportioned architectural diagram',
+  },
+  {
+    id: 'needs-accent-contrast',
+    title: 'Applied Curatorial Contrast',
+    description: 'Infused semantic palette differentiation and archival frame harmony across uniform forms.',
+    exemplars:
+      'uniform monochrome nodes needing semantic color contrast, flat unstyled boxes needing rich curatorial palette hierarchy',
+  },
+  {
+    id: 'dense-cluster',
+    title: 'Untangled Dense Cluster',
+    description: 'Resolved spatial collisions into a breathing gallery grid with harmonized connectors.',
+    exemplars:
+      'crowded overlapping shapes, dense node cluster needing clean alignment, tangled layout needing breathing room and grid spacing',
+  },
+  {
+    id: 'sparse-minimal',
+    title: 'Framed Minimalist Study',
+    description: 'Centered focal study with archival typography and poised gallery framing.',
+    exemplars:
+      'minimalist open canvas with one or two focal elements, sparse poetic study suited for bold framing and calm space',
   },
 ];

@@ -14,7 +14,7 @@ const DIM_MRL = 256;
 
 interface BankManifestEntry {
   index: number;
-  group: 'intent' | 'aesthetic' | 'blueprint' | 'archetype' | 'color' | 'animation';
+  group: 'intent' | 'aesthetic' | 'blueprint' | 'archetype' | 'color' | 'animation' | 'critique';
   id: string;
   subkind: string;
 }

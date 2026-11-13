@@ -14,6 +14,7 @@ import {
   SHAPE_ARCHETYPES,
   COLOR_PROTOTYPES,
   ANIMATION_PROTOTYPES,
+  CRITIQUE_PROTOTYPES,
 } from '../src/design/catalog.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -101,6 +102,14 @@ async function main() {
       id: anim.id,
       subkind: anim.anim,
       doc: `title: ${anim.title} | text: ${anim.exemplars}`,
+    });
+  }
+  for (const crit of CRITIQUE_PROTOTYPES) {
+    entries.push({
+      group: 'critique',
+      id: crit.id,
+      subkind: crit.title,
+      doc: `title: ${crit.title} — ${crit.description} | text: ${crit.exemplars}`,
     });
   }
 

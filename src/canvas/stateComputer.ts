@@ -53,7 +53,7 @@ export function buildStateComputerMessages(
         'TEMPO <reg|ALL> <faster|slower|reverse> | STOP <reg|ALL> | CONNECT <regA> <regB> | CONNECT ALL | ' +
         'COLOR <reg|ALL|FOCUS> <color> | STYLE <reg|ALL|FOCUS> | SCALE <reg|FOCUS> <up|down> | ' +
         'ARRANGE <row|column|grid> | DUP <reg|FOCUS> | LABEL <reg|FOCUS> | LOCK <reg|ALL|FOCUS> | UNLOCK <reg|ALL|FOCUS> | ' +
-        'DEL <reg|FOCUS> | CLEAR | THEME | UNDO | REDO | CAM <zoom_in|zoom_out|fit>. ' +
+        'DEL <reg|FOCUS> | CLEAR | THEME | HARMONIZE | UNDO | REDO | CAM <zoom_in|zoom_out|fit>. ' +
         'CRITICAL RULE: Output NOOP for filler/noise/comments. NEVER output DEL, CLEAR, or UNDO unless CMD explicitly says delete, remove, erase, clear canvas, or undo.',
     },
     {
@@ -394,13 +394,26 @@ export function compileVerifiedSyscall(
     }
   }
 
-  // Handle RELATIVE PLACEMENT ("move X above/below/left-of/right-of Y")
-  if (head === 'PLACE' || effectiveIntent === 'transform_move_relative' || slots.spatialRelation) {
+  // Handle HARMONIZE ("harmonize the canvas", "critique the composition", "curate layout")
+  if (head === 'HARMONIZE' || effectiveIntent === 'vision_harmonize') {
+    return {
+      opcodeLine: 'HARMONIZE',
+      syscall: { op: 'HARMONIZE', goalPrompt: res.rawText },
+    };
+  }
+
+  // Handle RELATIVE PLACEMENT ("move X above/below/left-of/right-of Y" or Qwen "MOVE s2 ABOVE s1")
+  const qwenRelCandidate = parts[2]?.toLowerCase() as SpatialRelation | undefined;
+  const validRel = new Set<SpatialRelation>(['above', 'below', 'left-of', 'right-of', 'near']);
+  if (
+    head === 'PLACE' ||
+    (head === 'MOVE' && qwenRelCandidate && validRel.has(qwenRelCandidate) && parts[3]) ||
+    effectiveIntent === 'transform_move_relative' ||
+    slots.spatialRelation
+  ) {
     const pair = resolvePairRegisters(snapshot, res, parts[1], parts[3]);
-    const qRel = parts[2]?.toLowerCase() as SpatialRelation | undefined;
-    const validRel = new Set<SpatialRelation>(['above', 'below', 'left-of', 'right-of', 'near']);
     const relation: SpatialRelation =
-      slots.spatialRelation ?? (qRel && validRel.has(qRel) ? qRel : 'right-of');
+      slots.spatialRelation ?? (qwenRelCandidate && validRel.has(qwenRelCandidate) ? qwenRelCandidate : 'right-of');
     if (pair) {
       return {
         opcodeLine: `PLACE ${pair.regA} ${relation} ${pair.regB}`,
@@ -541,15 +554,94 @@ export function compileVerifiedSyscall(
     };
   }
 
-  // CONNECT
+  // CONNECT (supports both existing registers AND auto-materializing missing named endpoints + edge labels!)
   if (head === 'CONNECT' || effectiveIntent === 'connect_shapes') {
     if (slots.connectAll || parts[1]?.toUpperCase() === 'ALL') {
-      return { opcodeLine: 'CONNECT ALL', syscall: { op: 'CONNECT', all: true } };
+      return {
+        opcodeLine: 'CONNECT ALL',
+        syscall: { op: 'CONNECT', all: true, edgeLabel: slots.edgeLabel },
+      };
     }
+
+    const matchEndpoint = (
+      hint: string | null,
+      semMatch: { id: string; reg: string; label: string; score: number } | null | undefined,
+      qwenTok: string | undefined,
+      excludeReg?: string | null,
+    ): { reg: string | null; label: string | null } => {
+      const shapes = snapshot.shapes.filter((s) => !excludeReg || s.reg !== excludeReg);
+      if (hint) {
+        const h = hint.trim().toLowerCase();
+        // Pronoun / positional references
+        if (/^(it|this|that)$/i.test(h) && shapes.length > 0) {
+          const foc = snapshot.focusRegs.find((r) => r !== excludeReg);
+          return { reg: foc ?? shapes[shapes.length - 1].reg, label: null };
+        }
+        if (/\bfirst\b/.test(h) && snapshot.shapes[0] && snapshot.shapes[0].reg !== excludeReg) {
+          return { reg: snapshot.shapes[0].reg, label: null };
+        }
+        if (/\bsecond\b/.test(h) && snapshot.shapes[1] && snapshot.shapes[1].reg !== excludeReg) {
+          return { reg: snapshot.shapes[1].reg, label: null };
+        }
+        if (/\blast\b/.test(h) && shapes.length > 0) {
+          return { reg: shapes[shapes.length - 1].reg, label: null };
+        }
+        // Exact or substring label match
+        const byLbl = shapes.find((s) => {
+          const sl = s.label.trim().toLowerCase();
+          return sl.length >= 2 && (h.includes(sl) || sl.includes(h));
+        });
+        if (byLbl) return { reg: byLbl.reg, label: null };
+
+        // Pure shape-word reference (e.g. "the circle", "the box") without a proper name
+        for (const [shapeKey, words] of Object.entries(SHAPE_SYNONYMS)) {
+          if (words.some((w) => new RegExp(`^(?:the\\s+)?${w}$`, 'i').test(h))) {
+            const hit = shapes.find((s) => s.shapeType === shapeKey);
+            if (hit) return { reg: hit.reg, label: null };
+          }
+        }
+
+        // High-confidence EmbeddingGemma 2 match on canvas
+        if (semMatch && semMatch.score >= 0.72 && semMatch.reg !== excludeReg) {
+          return { reg: semMatch.reg, label: null };
+        }
+
+        // Named concept does not exist on canvas yet -> auto-materialize!
+        return { reg: null, label: hint.trim() };
+      }
+
+      if (qwenTok && /^s\d+$/i.test(qwenTok)) {
+        const hit = shapes.find((s) => s.reg.toLowerCase() === qwenTok.toLowerCase());
+        if (hit) return { reg: hit.reg, label: null };
+      }
+      return { reg: null, label: null };
+    };
+
+    if (slots.sourceHint || slots.targetHint) {
+      const src = matchEndpoint(slots.sourceHint, res.sourceMatch, parts[1], null);
+      const dst = matchEndpoint(slots.targetHint, res.targetMatch, parts[2], src.reg);
+      return {
+        opcodeLine: `CONNECT ${src.reg ?? `"${src.label}"`} -> ${dst.reg ?? `"${dst.label}"`}${slots.edgeLabel ? ` [${slots.edgeLabel}]` : ''}`,
+        syscall: {
+          op: 'CONNECT',
+          fromReg: src.reg,
+          toReg: dst.reg,
+          fromLabel: src.label,
+          toLabel: dst.label,
+          edgeLabel: slots.edgeLabel,
+        },
+      };
+    }
+
     const pair = resolvePairRegisters(snapshot, res, parts[1], parts[2]);
     return {
       opcodeLine: pair ? `CONNECT ${pair.regA} -> ${pair.regB}` : 'CONNECT SEQ',
-      syscall: { op: 'CONNECT', fromReg: pair?.regA ?? null, toReg: pair?.regB ?? null },
+      syscall: {
+        op: 'CONNECT',
+        fromReg: pair?.regA ?? null,
+        toReg: pair?.regB ?? null,
+        edgeLabel: slots.edgeLabel,
+      },
     };
   }
 

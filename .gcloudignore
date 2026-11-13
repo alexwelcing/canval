@@ -1,0 +1,9 @@
+.git
+.gitignore
+.wrangler
+node_modules/
+dist/
+worker/
+wrangler.jsonc
+*.log
+scripts/test_studio_e2e.mjs
