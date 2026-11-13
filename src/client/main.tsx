@@ -60,6 +60,7 @@ const AMBIENT_SUGGESTIONS = [
   '“draw a mind map about Ocean Robotics”',
   '“draw a cloud called CDN and connect it to Speak to Paint”',
   '“switch to watercolor atelier”',
+  '“export canvas to image”',
   '“switch to cyberpunk neon aesthetic”',
   '“arrange all shapes in a circle”',
   '“frame all shapes as Studio Board”',
@@ -98,6 +99,7 @@ declare global {
     __tldrawEditor?: Editor
     voiceCanvasSpeak?: (utterance: string) => Promise<CanvasActionCommand | null>
     voiceCanvasHarmonize?: (goalPrompt?: string) => Promise<void>
+    voiceCanvasExport?: (format?: 'png' | 'svg' | 'jpeg' | 'webp') => Promise<string>
   }
 }
 
@@ -190,6 +192,101 @@ function renderCanvasSnapshotBase64(shapes: CanvasShapeSummary[], bgHex: string)
   } catch {
     return ''
   }
+}
+
+function triggerBrowserDownload(blobOrDataUrl: Blob | string, filename: string) {
+  const link = document.createElement('a')
+  const isBlob = typeof blobOrDataUrl !== 'string'
+  const href = isBlob ? URL.createObjectURL(blobOrDataUrl) : blobOrDataUrl
+  link.href = href
+  link.download = filename
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  setTimeout(() => {
+    link.remove()
+    if (isBlob) URL.revokeObjectURL(href)
+  }, 1500)
+}
+
+async function exportCanvasToImageFile(
+  editor: Editor,
+  theme: DesignThemeSpec,
+  ghostId: TLShapeId | null,
+  format: 'png' | 'svg' | 'jpeg' | 'webp' = 'png'
+): Promise<string> {
+  const shapesToExport = editor
+    .getCurrentPageShapes()
+    .filter((s) => s.id !== ghostId)
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const ext = format === 'jpeg' ? 'jpg' : format
+  const filename = `canval-${theme.id}-${stamp}.${ext}`
+
+  try {
+    if (format === 'svg' && shapesToExport.length > 0) {
+      const svgRes = await editor.getSvgString(shapesToExport, {
+        background: true,
+        padding: 36,
+        scale: 1,
+        darkMode: theme.isDark,
+      })
+      if (svgRes?.svg) {
+        const blob = new Blob([svgRes.svg], { type: 'image/svg+xml;charset=utf-8' })
+        triggerBrowserDownload(blob, filename)
+        return filename
+      }
+    }
+
+    if (shapesToExport.length > 0) {
+      const imgRes = await editor.toImage(shapesToExport, {
+        format: format === 'svg' ? 'png' : format,
+        background: false,
+        padding: 40,
+        scale: 1,
+        pixelRatio: 2,
+        darkMode: theme.isDark,
+      })
+
+      if (imgRes?.blob) {
+        try {
+          const bitmap = await createImageBitmap(imgRes.blob)
+          const canvas = document.createElement('canvas')
+          canvas.width = bitmap.width
+          canvas.height = bitmap.height
+          const ctx = canvas.getContext('2d')
+          if (ctx) {
+            ctx.fillStyle = theme.canvasBg || '#f6f1e5'
+            ctx.fillRect(0, 0, canvas.width, canvas.height)
+            ctx.drawImage(bitmap, 0, 0)
+            const mime =
+              format === 'jpeg'
+                ? 'image/jpeg'
+                : format === 'webp'
+                  ? 'image/webp'
+                  : 'image/png'
+            const compositedBlob = await new Promise<Blob | null>((resolve) =>
+              canvas.toBlob((b) => resolve(b), mime, 0.94)
+            )
+            if (compositedBlob) {
+              triggerBrowserDownload(compositedBlob, filename)
+              return filename
+            }
+          }
+        } catch {}
+
+        triggerBrowserDownload(imgRes.blob, filename)
+        return filename
+      }
+    }
+  } catch {}
+
+  // Fallback snapshot export if canvas is empty or running in headless DOM
+  const summaries = summarizeCanvasShapes(editor, ghostId)
+  const fallbackDataUrl = renderCanvasSnapshotBase64(summaries, theme.canvasBg)
+  if (fallbackDataUrl) {
+    triggerBrowserDownload(fallbackDataUrl, filename)
+  }
+  return filename
 }
 
 /**
@@ -589,6 +686,10 @@ function App() {
         else editor.zoomToFit({ animation: { duration: 280 } })
       } else if (cmd.intent === 'apply_theme' && cmd.theme) {
         applyThemeToCanvas(editor, cmd.theme)
+      } else if (cmd.intent === 'export_canvas') {
+        const format = cmd.exportFormat ?? 'png'
+        spawnWatercolorBloom(editor, cx - 160, cy - 90, 320, 180, theme.primaryColor)
+        await exportCanvasToImageFile(editor, theme, ghostShapeIdRef.current, format)
       } else if (cmd.intent === 'vision_harmonize') {
         const shapes = summarizeCanvasShapes(editor, ghostShapeIdRef.current)
         const imageBase64 = renderCanvasSnapshotBase64(shapes, theme.canvasBg)
@@ -1213,6 +1314,11 @@ function App() {
     window.voiceCanvasHarmonize = async (goalPrompt = 'cohesive watercolor architectural diagram') => {
       await dispatchSpokenUtterance(`harmonize the visual design for ${goalPrompt}`)
     }
+    window.voiceCanvasExport = async (format: 'png' | 'svg' | 'jpeg' | 'webp' = 'png') => {
+      const editor = editorRef.current
+      if (!editor) return ''
+      return exportCanvasToImageFile(editor, activeThemeRef.current, ghostShapeIdRef.current, format)
+    }
   }, [dispatchSpokenUtterance])
 
   useEffect(() => {
@@ -1610,7 +1716,7 @@ function App() {
               font: 'draw',
               size: 's',
               richText: toRichText(
-                '4. ARRANGE, MOVE & EDIT\n• "Arrange all shapes in a circle"\n• "Align all shapes in a grid"\n• "Frame all shapes as Studio Board"\n• "Undo that" / "Clear the canvas"'
+                '4. ARRANGE, EXPORT & EDIT\n• "Export canvas to image" / "Save as SVG"\n• "Arrange all shapes in a circle"\n• "Frame all shapes as Studio Board"\n• "Undo that" / "Clear the canvas"'
               ),
             },
           } as any)

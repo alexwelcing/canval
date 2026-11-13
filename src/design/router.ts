@@ -96,6 +96,7 @@ export interface CanvasActionCommand {
   alignment?: 'row' | 'column' | 'grid' | 'circle' | 'spread'
   cameraOp?: 'zoom_in' | 'zoom_out' | 'fit' | 'center' | 'pan_left' | 'pan_right' | 'pan_up' | 'pan_down'
   historyOp?: 'undo' | 'redo'
+  exportFormat?: 'png' | 'svg' | 'jpeg' | 'webp'
   steps?: CanvasActionCommand[]
 }
 
@@ -325,7 +326,7 @@ export function splitCompoundUtterance(utterance: string): string[] {
   }
   const parts = clean
     .split(
-      /\s*(?:;\s*|\bthen\s+|\band\s+then\s+|\band\s+(?=(?:draw|create|add|make|put|drop|connect|link|wire|point|switch|apply|change|color|move|shift|delete|remove|erase|duplicate|clone|rename|relabel|frame|wrap|align|arrange|distribute|focus|zoom|pan|harmonize|undo|redo|clear)\b))/i
+      /\s*(?:;\s*|\bthen\s+|\band\s+then\s+|\band\s+(?=(?:draw|create|add|make|put|drop|connect|link|wire|point|switch|apply|change|color|move|shift|delete|remove|erase|duplicate|clone|rename|relabel|frame|wrap|align|arrange|distribute|focus|zoom|pan|harmonize|export|download|save|snapshot|undo|redo|clear)\b))/i
     )
     .map((s) => s.trim())
     .filter((s) => s.length >= 3)
@@ -351,6 +352,13 @@ export function routeSingleClauseCommand(
   }
 
   // Deterministic intent boosts for unambiguous spoken triggers
+  if (
+    /\b(export|download|save|snapshot|screenshot|capture)\b.*\b(canvas|diagram|image|png|svg|jpeg|jpg|webp|board|picture|photo)\b|\b(export|download)\s+(?:to|as)\s+(?:an?\s+)?(?:image|png|svg|jpeg|jpg|webp)\b|^export(?:\s+canvas)?$/i.test(
+      lower
+    )
+  ) {
+    intentScores.export_canvas += 0.88
+  }
   if (/\b(clear|wipe|reset|erase)\b.*\b(canvas|everything|all|board)\b|^clear$|^reset canvas$/i.test(lower)) {
     intentScores.clear_canvas += 0.85
   }
@@ -855,6 +863,25 @@ export function routeSingleClauseCommand(
       summary: 'Harmonizing canvas design via EmbeddingGemma 2 Vision-Text alignment',
       modelUsed,
       latencyMs,
+    }
+  }
+
+  if (bestIntent === 'export_canvas') {
+    const exportFormat: 'png' | 'svg' | 'jpeg' | 'webp' = /\bsvg\b/i.test(lower)
+      ? 'svg'
+      : /\b(jpe?g)\b/i.test(lower)
+        ? 'jpeg'
+        : /\bwebp\b/i.test(lower)
+          ? 'webp'
+          : 'png'
+    return {
+      intent: 'export_canvas',
+      confidence,
+      utterance: clean,
+      summary: `Exported canvas diagram to ${exportFormat.toUpperCase()} image`,
+      modelUsed,
+      latencyMs,
+      exportFormat,
     }
   }
 

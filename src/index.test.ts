@@ -27,7 +27,7 @@ test('rejects invalid task payload at Zod boundary', async () => {
   expect(res.status).toBe(400)
 })
 
-test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (11 themes, 10 layouts, 21 intents)', async () => {
+test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (11 themes, 10 layouts, 22 intents)', async () => {
   const res = await app.request('/api/voice/catalog')
   expect(res.status).toBe(200)
   const body = (await res.json()) as any
@@ -35,7 +35,7 @@ test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (11 themes,
   expect(body.status.embeddingGemma).toBe('google/embeddinggemma-2')
   expect(body.themes.length).toBe(11)
   expect(body.layouts.length).toBe(10)
-  expect(body.intents.length).toBe(21)
+  expect(body.intents.length).toBe(22)
 })
 
 test('routes spoken shape creation command with semantic archetype & color', async () => {
@@ -219,6 +219,30 @@ test('handles relative spatial placement, rename, frame, swap, and circle distri
   const frameCmd = ((await frameRes.json()) as any).command
   expect(frameCmd.intent).toBe('group_frame')
   expect(frameCmd.frameOp.frameLabel).toBe('Core Platform')
+
+  const exportPngRes = await app.request('/api/voice/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      utterance: 'export canvas to image',
+      canvasShapes,
+    }),
+  })
+  const exportPngCmd = ((await exportPngRes.json()) as any).command
+  expect(exportPngCmd.intent).toBe('export_canvas')
+  expect(exportPngCmd.exportFormat).toBe('png')
+
+  const exportSvgRes = await app.request('/api/voice/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      utterance: 'save the diagram as svg',
+      canvasShapes,
+    }),
+  })
+  const exportSvgCmd = ((await exportSvgRes.json()) as any).command
+  expect(exportSvgCmd.intent).toBe('export_canvas')
+  expect(exportSvgCmd.exportFormat).toBe('svg')
 })
 
 test('records telemetry in SQLite and serves /api/voice/history and /api/voice/metrics', async () => {

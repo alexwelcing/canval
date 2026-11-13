@@ -52,6 +52,7 @@ export type CommandIntentId =
   | 'swap_positions'
   | 'camera_control'
   | 'vision_harmonize'
+  | 'export_canvas'
   | 'undo_redo'
   | 'clear_canvas'
 
@@ -362,6 +363,20 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
       'critique and balance the visual style',
       'auto align the aesthetic with vision',
       'polish the visual design',
+    ],
+  },
+  {
+    id: 'export_canvas',
+    title: 'Export or Save Canvas to Image (PNG / SVG / JPEG)',
+    description:
+      'Export, download, save, snapshot, or capture the current canvas diagram as a high-resolution PNG, SVG, or JPEG image file.',
+    exemplars: [
+      'export canvas to image',
+      'save the diagram as a png',
+      'download the canvas as an image',
+      'export diagram to svg',
+      'take a snapshot of the canvas',
+      'save canvas image',
     ],
   },
   {
