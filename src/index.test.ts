@@ -27,7 +27,7 @@ test('rejects invalid task payload at Zod boundary', async () => {
   expect(res.status).toBe(400)
 })
 
-test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (11 themes, 10 layouts, 22 intents)', async () => {
+test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (11 themes, 10 layouts, 23 intents)', async () => {
   const res = await app.request('/api/voice/catalog')
   expect(res.status).toBe(200)
   const body = (await res.json()) as any
@@ -35,7 +35,7 @@ test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (11 themes,
   expect(body.status.embeddingGemma).toBe('google/embeddinggemma-2')
   expect(body.themes.length).toBe(11)
   expect(body.layouts.length).toBe(10)
-  expect(body.intents.length).toBe(22)
+  expect(body.intents.length).toBe(23)
 })
 
 test('routes spoken shape creation command with semantic archetype & color', async () => {
@@ -243,6 +243,61 @@ test('handles relative spatial placement, rename, frame, swap, and circle distri
   const exportSvgCmd = ((await exportSvgRes.json()) as any).command
   expect(exportSvgCmd.intent).toBe('export_canvas')
   expect(exportSvgCmd.exportFormat).toBe('svg')
+
+  const animAllRes = await app.request('/api/voice/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      utterance: 'make all shapes float gently',
+      canvasShapes,
+    }),
+  })
+  const animAllCmd = ((await animAllRes.json()) as any).command
+  expect(animAllCmd.intent).toBe('animate_target')
+  expect(animAllCmd.animationOp.animationType).toBe('float')
+  expect(animAllCmd.animationOp.applyToAll).toBe(true)
+  expect(animAllCmd.animationOp.speed).toBe('slow')
+
+  const animSpinRes = await app.request('/api/voice/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      utterance: 'spin the Redis Cache quickly',
+      canvasShapes,
+    }),
+  })
+  const animSpinCmd = ((await animSpinRes.json()) as any).command
+  expect(animSpinCmd.intent).toBe('animate_target')
+  expect(animSpinCmd.animationOp.animationType).toBe('spin')
+  expect(animSpinCmd.animationOp.targetShapeId).toBe('shape:b')
+  expect(animSpinCmd.animationOp.speed).toBe('fast')
+
+  const animOrbitRes = await app.request('/api/voice/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      utterance: 'orbit the Redis Cache around the API Gateway',
+      canvasShapes,
+    }),
+  })
+  const animOrbitCmd = ((await animOrbitRes.json()) as any).command
+  expect(animOrbitCmd.intent).toBe('animate_target')
+  expect(animOrbitCmd.animationOp.animationType).toBe('orbit')
+  expect(animOrbitCmd.animationOp.targetShapeId).toBe('shape:b')
+  expect(animOrbitCmd.animationOp.orbitCenterShapeId).toBe('shape:a')
+
+  const animStopRes = await app.request('/api/voice/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      utterance: 'stop all animations',
+      canvasShapes,
+    }),
+  })
+  const animStopCmd = ((await animStopRes.json()) as any).command
+  expect(animStopCmd.intent).toBe('animate_target')
+  expect(animStopCmd.animationOp.animationType).toBe('stop')
+  expect(animStopCmd.animationOp.applyToAll).toBe(true)
 })
 
 test('records telemetry in SQLite and serves /api/voice/history and /api/voice/metrics', async () => {

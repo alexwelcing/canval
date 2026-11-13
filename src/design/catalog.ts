@@ -52,6 +52,7 @@ export type CommandIntentId =
   | 'swap_positions'
   | 'camera_control'
   | 'vision_harmonize'
+  | 'animate_target'
   | 'export_canvas'
   | 'undo_redo'
   | 'clear_canvas'
@@ -363,6 +364,24 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
       'critique and balance the visual style',
       'auto align the aesthetic with vision',
       'polish the visual design',
+    ],
+  },
+  {
+    id: 'animate_target',
+    title: 'Animate Canvas Elements or Diagram Flow',
+    description:
+      'Animate a shape, node, connected pipeline, or the entire canvas with continuous motion: float, bob, breathe, pulse, heartbeat, spin, rotate, orbit, revolve, bounce, jump, shake, wobble, wave, ripple, data flow, or stop animations.',
+    exemplars: [
+      'animate the canvas elements',
+      'make all shapes float gently',
+      'pulse the database node',
+      'spin the central hexagon',
+      'orbit the cloud around Speak to Paint',
+      'bounce the sticky note',
+      'animate data flow through the pipeline',
+      'send a wave across all shapes',
+      'shake the warning box',
+      'stop all animations',
     ],
   },
   {

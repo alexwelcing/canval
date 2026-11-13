@@ -97,6 +97,16 @@ export interface CanvasActionCommand {
   cameraOp?: 'zoom_in' | 'zoom_out' | 'fit' | 'center' | 'pan_left' | 'pan_right' | 'pan_up' | 'pan_down'
   historyOp?: 'undo' | 'redo'
   exportFormat?: 'png' | 'svg' | 'jpeg' | 'webp'
+  animationOp?: {
+    animationType: 'float' | 'pulse' | 'spin' | 'orbit' | 'bounce' | 'shake' | 'wave' | 'flow' | 'stop'
+    targetQuery: string
+    targetShapeId?: string
+    targetLabel?: string
+    orbitCenterShapeId?: string
+    orbitCenterLabel?: string
+    applyToAll: boolean
+    speed: 'slow' | 'normal' | 'fast'
+  }
   steps?: CanvasActionCommand[]
 }
 
@@ -326,7 +336,7 @@ export function splitCompoundUtterance(utterance: string): string[] {
   }
   const parts = clean
     .split(
-      /\s*(?:;\s*|\bthen\s+|\band\s+then\s+|\band\s+(?=(?:draw|create|add|make|put|drop|connect|link|wire|point|switch|apply|change|color|move|shift|delete|remove|erase|duplicate|clone|rename|relabel|frame|wrap|align|arrange|distribute|focus|zoom|pan|harmonize|export|download|save|snapshot|undo|redo|clear)\b))/i
+      /\s*(?:;\s*|\bthen\s+|\band\s+then\s+|\band\s+(?=(?:draw|create|add|make|put|drop|connect|link|wire|point|switch|apply|change|color|move|shift|delete|remove|erase|duplicate|clone|rename|relabel|frame|wrap|align|arrange|distribute|focus|zoom|pan|harmonize|animate|float|pulse|spin|rotate|orbit|revolve|bounce|shake|wobble|wave|ripple|stop|freeze|export|download|save|snapshot|undo|redo|clear)\b))/i
     )
     .map((s) => s.trim())
     .filter((s) => s.length >= 3)
@@ -352,6 +362,13 @@ export function routeSingleClauseCommand(
   }
 
   // Deterministic intent boosts for unambiguous spoken triggers
+  if (
+    /\b(animate|animation|animations|float|floating|bob|bobbing|hover|breathe|breathing|pulse|pulsing|heartbeat|throb|spin|spinning|rotate|rotating|twirl|orbit|orbiting|revolve|revolving|bounce|bouncing|jump|hop|shake|shaking|jiggle|wobble|vibrate|ripple|wave|data flow|signal flow|stop animat\w*|freeze|pause animat\w*)\b/i.test(
+      lower
+    )
+  ) {
+    intentScores.animate_target += 0.92
+  }
   if (
     /\b(export|download|save|snapshot|screenshot|capture)\b.*\b(canvas|diagram|image|png|svg|jpeg|jpg|webp|board|picture|photo)\b|\b(export|download)\s+(?:to|as)\s+(?:an?\s+)?(?:image|png|svg|jpeg|jpg|webp)\b|^export(?:\s+canvas)?$/i.test(
       lower
@@ -383,7 +400,10 @@ export function routeSingleClauseCommand(
   if (/\b(frame all|wrap .* in a frame|enclose .* in a frame|create a frame around)\b/i.test(lower)) {
     intentScores.group_frame += 0.85
   }
-  if (/\b(in a circle|radial ring|distribute .* evenly|space .* out)\b/i.test(lower)) {
+  if (
+    /\b(in a circle|radial ring|distribute .* evenly|space .* out)\b/i.test(lower) &&
+    !/\b(orbit|revolve|spin|animate)\b/i.test(lower)
+  ) {
     intentScores.distribute_shapes += 0.84
   }
   if (/\b(connect|link|arrow from|point|wire)\b.+\b(to|with|into)\b/i.test(lower)) {
@@ -397,6 +417,9 @@ export function routeSingleClauseCommand(
   }
   if (
     /\b(architecture diagram|flowchart|flow chart|mind ?map|kanban|2x2|two by two|matrix|roadmap|timeline|diagram|pipeline|event[- ]?driven|mesh|c4|funnel|user journey|rag)\b/i.test(
+      lower
+    ) &&
+    !/\b(animate|pulse|spin|rotate|float|orbit|revolve|bounce|shake|wobble|ripple|wave|export|save|download|stop)\b/i.test(
       lower
     )
   ) {
@@ -866,6 +889,114 @@ export function routeSingleClauseCommand(
     }
   }
 
+  if (bestIntent === 'animate_target') {
+    const speed: 'slow' | 'normal' | 'fast' = /\b(fast|quick|quickly|rapid|rapidly|turbo|high speed)\b/i.test(lower)
+      ? 'fast'
+      : /\b(slow|slowly|gentle|gently|calm|subtle|softly)\b/i.test(lower)
+        ? 'slow'
+        : 'normal'
+
+    let animationType: 'float' | 'pulse' | 'spin' | 'orbit' | 'bounce' | 'shake' | 'wave' | 'flow' | 'stop' = 'float'
+    if (/\b(stop|freeze|pause|halt|still)\b/i.test(lower)) {
+      animationType = 'stop'
+    } else if (/\b(orbit|orbiting|revolve|revolving)\b/i.test(lower)) {
+      animationType = 'orbit'
+    } else if (/\b(spin|spinning|rotate|rotating|twirl|twirling)\b/i.test(lower)) {
+      animationType = 'spin'
+    } else if (/\b(bounce|bouncing|jump|jumping|hop|hopping)\b/i.test(lower)) {
+      animationType = 'bounce'
+    } else if (/\b(shake|shaking|jiggle|jiggling|wobble|wobbling|vibrate|vibrating)\b/i.test(lower)) {
+      animationType = 'shake'
+    } else if (/\b(pulse|pulsing|heartbeat|throb|throbbing)\b/i.test(lower)) {
+      animationType = 'pulse'
+    } else if (/\b(wave|ripple|rippling|undulate)\b/i.test(lower)) {
+      animationType = 'wave'
+    } else if (/\b(data flow|signal flow|flow|packets|stream)\b/i.test(lower)) {
+      animationType = 'flow'
+    } else if (/\b(float|floating|bob|bobbing|hover|hovering|breathe|breathing|drift)\b/i.test(lower)) {
+      animationType = 'float'
+    } else if (/\b(all|every|everything|canvas|diagram|pipeline|elements)\b/i.test(lower)) {
+      animationType = 'flow'
+    }
+
+    const orbitAroundMatch = clean.match(/\b(?:orbit|revolve)\s+(.+?)\s+around\s+(.+)$/i)
+    if (orbitAroundMatch) {
+      const subjRaw = orbitAroundMatch[1]!.trim()
+      const centerRaw = orbitAroundMatch[2]!.trim()
+      const isAllSubj = /\b(all|every|everything|cards|nodes|shapes|elements)\b/i.test(subjRaw)
+      const centerResolved = resolveBestTarget(centerRaw, canvasShapes, denseScores?.destTargetScores)
+      const subjResolved = isAllSubj
+        ? { shape: undefined, similarity: 1 }
+        : resolveBestTarget(subjRaw, canvasShapes, denseScores?.sourceTargetScores ?? denseScores?.targetScores)
+
+      const targetLabel = isAllSubj ? 'all shapes' : (subjResolved.shape?.label ?? subjRaw)
+      const centerLabel = centerResolved.shape?.label ?? centerRaw
+      return {
+        intent: 'animate_target',
+        confidence,
+        utterance: clean,
+        summary: `Orbiting "${targetLabel}" around "${centerLabel}" (${speed})`,
+        modelUsed,
+        latencyMs,
+        animationOp: {
+          animationType: 'orbit',
+          targetQuery: subjRaw,
+          targetShapeId: subjResolved.shape?.id,
+          targetLabel,
+          orbitCenterShapeId: centerResolved.shape?.id,
+          orbitCenterLabel: centerLabel,
+          applyToAll: isAllSubj,
+          speed,
+        },
+      }
+    }
+
+    const strippedTarget = clean
+      .replace(
+        /\b(?:please|can you|hey|let's|make|start|begin|animate|animation|animations|animated|the|a|an|all|every|shapes?|nodes?|elements?|canvas|diagram|pipeline|board|everything|float|floating|bob|bobbing|hover|breathe|breathing|pulse|pulsing|heartbeat|throb|spin|spinning|rotate|rotating|twirl|orbit|orbiting|revolve|revolving|bounce|bouncing|jump|hop|shake|shaking|jiggle|wobble|vibrate|ripple|wave|data|signal|flow|through|across|on|in|circle|stop|freeze|pause|slow|slowly|gentle|gently|fast|quickly|rapidly|continuously)\b/gi,
+        ' '
+      )
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    const explicitAll =
+      /\b(all|every|everything|canvas|diagram|pipeline|elements)\b/i.test(lower) ||
+      animationType === 'flow' ||
+      animationType === 'wave' ||
+      (animationType === 'stop' && strippedTarget.length < 2)
+
+    const applyToAll = explicitAll || strippedTarget.length < 2
+    const resolved = !applyToAll
+      ? resolveBestTarget(strippedTarget || clean, canvasShapes, denseScores?.targetScores)
+      : { shape: undefined, similarity: 1 }
+
+    const targetLabel = applyToAll
+      ? 'all canvas elements'
+      : (resolved.shape?.label ?? (strippedTarget || 'selected shape'))
+
+    const summary =
+      animationType === 'stop'
+        ? `Stopped animations on ${targetLabel}`
+        : `Animating ${targetLabel} (${animationType} · ${speed})`
+
+    return {
+      intent: 'animate_target',
+      confidence,
+      utterance: clean,
+      summary,
+      modelUsed,
+      latencyMs,
+      animationOp: {
+        animationType,
+        targetQuery: strippedTarget || clean,
+        targetShapeId: resolved.shape?.id,
+        targetLabel,
+        applyToAll,
+        speed,
+      },
+    }
+  }
+
   if (bestIntent === 'export_canvas') {
     const exportFormat: 'png' | 'svg' | 'jpeg' | 'webp' = /\bsvg\b/i.test(lower)
       ? 'svg'
@@ -916,8 +1047,12 @@ export function routeVoiceCommand(
     let clause = clauses[i]!
     if (lastCreatedLabel) {
       clause = clause
-        .replace(/\b(connect|link|wire|point|move|color|make|scale|resize|rename)\s+(it|that|the new node|the new box)\b/gi, `$1 ${lastCreatedLabel}`)
+        .replace(
+          /\b(connect|link|wire|point|move|color|make|scale|resize|rename|animate|float|pulse|spin|rotate|orbit|revolve|bounce|shake|wobble)\s+(it|that|the new node|the new box)\b/gi,
+          `$1 ${lastCreatedLabel}`
+        )
         .replace(/\bto\s+(it|that|the new node|the new box)\b/gi, `to ${lastCreatedLabel}`)
+        .replace(/\baround\s+(it|that|the new node|the new box)\b/gi, `around ${lastCreatedLabel}`)
     }
 
     const stepCmd = routeSingleClauseCommand(clause, workingShapes, i === 0 ? denseScores : undefined)

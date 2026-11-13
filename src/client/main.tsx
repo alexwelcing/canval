@@ -57,15 +57,16 @@ registerProcessor('earlybird-cap', EarlybirdCaptureProcessor);
 
 const AMBIENT_SUGGESTIONS = [
   '“generate a system architecture diagram”',
+  '“make all shapes float gently”',
+  '“animate data flow through the pipeline”',
+  '“spin Speak to Paint”',
   '“draw a mind map about Ocean Robotics”',
   '“draw a cloud called CDN and connect it to Speak to Paint”',
   '“switch to watercolor atelier”',
   '“export canvas to image”',
   '“switch to cyberpunk neon aesthetic”',
   '“arrange all shapes in a circle”',
-  '“frame all shapes as Studio Board”',
-  '“harmonize the visual design”',
-  '“clear the canvas”',
+  '“stop all animations”',
 ]
 
 const COLOR_HEX_MAP: Record<string, string> = {
@@ -92,6 +93,28 @@ interface WatercolorBloomItem {
   h: number
   colorHex: string
   edgeHex: string
+}
+
+type AnimationMotionMode = 'float' | 'pulse' | 'spin' | 'orbit' | 'bounce' | 'shake' | 'wave' | 'flow'
+
+interface ActiveShapeAnimation {
+  shapeId: TLShapeId
+  shapeType: string
+  mode: AnimationMotionMode
+  speedMultiplier: number
+  phaseOffset: number
+  baseX: number
+  baseY: number
+  w: number
+  h: number
+  baseRotation: number
+  baseOpacity: number
+  color?: string
+  orbitCenterX?: number
+  orbitCenterY?: number
+  orbitRadius?: number
+  orbitBaseAngle?: number
+  orbitCenterShapeId?: TLShapeId
 }
 
 declare global {
@@ -427,9 +450,12 @@ function App() {
   const editorRef = useRef<Editor | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const ghostShapeIdRef = useRef<TLShapeId | null>(null)
+  const activeAnimationsRef = useRef<Map<TLShapeId, ActiveShapeAnimation>>(new Map())
+  const flowPulseIdxRef = useRef<number>(0)
 
   const [activeTheme, setActiveTheme] = useState<DesignThemeSpec>(DESIGN_THEMES[0]!)
   const [blooms, setBlooms] = useState<WatercolorBloomItem[]>([])
+  const [animStatus, setAnimStatus] = useState<{ count: number; mode: string } | null>(null)
   const [micState, setMicState] = useState<'listening' | 'connecting' | 'air-keyboard'>('connecting')
   const [micLevel, setMicLevel] = useState<number>(0)
   const [liveWords, setLiveWords] = useState<[string, number][]>([])
@@ -483,6 +509,130 @@ function App() {
     },
     []
   )
+
+  // Real-time 60fps Canvas Element Physics & Animation Loop (history: 'ignore')
+  useEffect(() => {
+    let rafId = 0
+    let lastBloomTime = 0
+    const tStart = performance.now()
+
+    const tick = (now: number) => {
+      rafId = requestAnimationFrame(tick)
+      const animMap = activeAnimationsRef.current
+      const editor = editorRef.current
+      if (!editor || animMap.size === 0) return
+
+      const t = (now - tStart) / 1000
+      const selectedIds = new Set(editor.getSelectedShapeIds())
+      const isDragging = editor.inputs?.isDragging ?? false
+
+      try {
+        editor.run(
+          () => {
+            for (const [shapeId, anim] of animMap.entries()) {
+              const live = editor.getShape(shapeId) as any
+              if (!live) {
+                animMap.delete(shapeId)
+                continue
+              }
+
+              // If the user is actively dragging this shape, update its anchor coordinates
+              if (isDragging && selectedIds.has(shapeId)) {
+                anim.baseX = live.x
+                anim.baseY = live.y
+                continue
+              }
+
+              const omega = t * anim.speedMultiplier + anim.phaseOffset
+              let nx = anim.baseX
+              let ny = anim.baseY
+              let nRot = anim.baseRotation
+              let nOpacity = anim.baseOpacity
+
+              if (anim.mode === 'float') {
+                nx = anim.baseX + Math.sin(omega * 1.45) * 11
+                ny = anim.baseY + Math.cos(omega * 1.95) * 14
+                nRot = anim.baseRotation + Math.sin(omega * 1.15) * 0.042
+              } else if (anim.mode === 'pulse') {
+                const beat = Math.pow(Math.abs(Math.sin(omega * 2.5)), 3)
+                ny = anim.baseY - beat * 11
+                nOpacity = 0.48 + 0.5 * (0.5 + 0.5 * Math.sin(omega * 3.2))
+                nRot = anim.baseRotation + Math.sin(omega * 1.6) * 0.025
+              } else if (anim.mode === 'spin') {
+                const theta = anim.baseRotation + omega * 1.65
+                const cx = anim.baseX + anim.w / 2
+                const cy = anim.baseY + anim.h / 2
+                nx = cx - (anim.w / 2) * Math.cos(theta) + (anim.h / 2) * Math.sin(theta)
+                ny = cy - (anim.w / 2) * Math.sin(theta) - (anim.h / 2) * Math.cos(theta)
+                nRot = theta
+              } else if (anim.mode === 'orbit') {
+                let centerX = anim.orbitCenterX ?? 0
+                let centerY = anim.orbitCenterY ?? 0
+                if (anim.orbitCenterShapeId) {
+                  const centerBounds = editor.getShapePageBounds(anim.orbitCenterShapeId)
+                  if (centerBounds) {
+                    centerX = centerBounds.x + centerBounds.w / 2
+                    centerY = centerBounds.y + centerBounds.h / 2
+                  }
+                }
+                const radius = anim.orbitRadius ?? 280
+                const angle = (anim.orbitBaseAngle ?? 0) + t * anim.speedMultiplier * 0.85
+                nx = centerX + Math.cos(angle) * radius - anim.w / 2
+                ny = centerY + Math.sin(angle) * radius - anim.h / 2
+                nRot = Math.sin(angle) * 0.06
+              } else if (anim.mode === 'bounce') {
+                ny = anim.baseY - Math.abs(Math.sin(omega * 2.9)) * 36
+                nRot = anim.baseRotation + Math.cos(omega * 2.9) * 0.045
+              } else if (anim.mode === 'shake') {
+                nx = anim.baseX + Math.sin(omega * 18) * 9
+                ny = anim.baseY + Math.cos(omega * 14) * 4
+                nRot = anim.baseRotation + Math.sin(omega * 16) * 0.065
+              } else if (anim.mode === 'wave') {
+                const wavePhase = anim.baseX * 0.0045 - t * anim.speedMultiplier * 2.7
+                ny = anim.baseY + Math.sin(wavePhase) * 28
+                nRot = Math.cos(wavePhase) * 0.065
+              } else if (anim.mode === 'flow') {
+                const flowWave = anim.baseX * 0.0035 - t * anim.speedMultiplier * 2.2
+                nx = anim.baseX + Math.cos(omega * 1.3) * 6
+                ny = anim.baseY + Math.sin(omega * 1.75) * 10
+                nRot = anim.baseRotation + Math.sin(omega * 1.1) * 0.03
+                nOpacity = 0.68 + 0.3 * (0.5 + 0.5 * Math.sin(flowWave))
+              }
+
+              editor.updateShape({
+                id: shapeId,
+                type: anim.shapeType,
+                x: nx,
+                y: ny,
+                rotation: nRot,
+                opacity: Number(Math.min(1, Math.max(0.2, nOpacity)).toFixed(3)),
+              } as any)
+            }
+          },
+          { history: 'ignore' }
+        )
+
+        // Periodically emit a travelling watercolor bloom along 'flow' or 'pulse' nodes
+        if (now - lastBloomTime > 1250) {
+          const flowEntries = Array.from(animMap.values()).filter(
+            (a) => a.mode === 'flow' || a.mode === 'pulse'
+          )
+          if (flowEntries.length > 0) {
+            lastBloomTime = now
+            const chosen = flowEntries[flowPulseIdxRef.current % flowEntries.length]!
+            flowPulseIdxRef.current += 1
+            const b = editor.getShapePageBounds(chosen.shapeId)
+            if (b) {
+              spawnWatercolorBloom(editor, b.x, b.y, b.w, b.h, chosen.color)
+            }
+          }
+        }
+      } catch {}
+    }
+
+    rafId = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(rafId)
+  }, [spawnWatercolorBloom])
 
   const clearSpeculativeGhostShape = useCallback(() => {
     const editor = editorRef.current
@@ -664,10 +814,138 @@ function App() {
       const cy = viewport.y + viewport.h / 2
 
       if (cmd.intent === 'clear_canvas') {
+        activeAnimationsRef.current.clear()
+        setAnimStatus(null)
         const allIds = Array.from(editor.getCurrentPageShapeIds())
         if (allIds.length > 0) {
           editor.deleteShapes(allIds)
         }
+      } else if (cmd.intent === 'animate_target' && cmd.animationOp) {
+        const {
+          animationType,
+          applyToAll,
+          targetShapeId,
+          targetLabel,
+          orbitCenterShapeId,
+          orbitCenterLabel,
+          speed,
+        } = cmd.animationOp
+
+        const allShapes = (editor.getCurrentPageShapes() as any[]).filter(
+          (s) => s.type !== 'arrow' && s.type !== 'frame' && s.id !== ghostShapeIdRef.current
+        )
+
+        if (animationType === 'stop') {
+          const toStop = applyToAll
+            ? Array.from(activeAnimationsRef.current.values())
+            : Array.from(activeAnimationsRef.current.values()).filter(
+                (a) => a.shapeId === targetShapeId
+              )
+          editor.run(() => {
+            for (const anim of toStop) {
+              if (editor.getShape(anim.shapeId)) {
+                editor.updateShape({
+                  id: anim.shapeId,
+                  type: anim.shapeType,
+                  x: anim.baseX,
+                  y: anim.baseY,
+                  rotation: anim.baseRotation,
+                  opacity: 0.94,
+                } as any)
+              }
+              activeAnimationsRef.current.delete(anim.shapeId)
+            }
+          })
+          const rem = activeAnimationsRef.current.size
+          const firstMode = Array.from(activeAnimationsRef.current.values())[0]?.mode ?? 'float'
+          setAnimStatus(rem > 0 ? { count: rem, mode: firstMode } : null)
+          return
+        }
+
+        let targets = applyToAll
+          ? allShapes
+          : allShapes.filter(
+              (s) =>
+                s.id === targetShapeId ||
+                (targetLabel &&
+                  extractLabelFromShape(editor, s)
+                    .toLowerCase()
+                    .includes(targetLabel.toLowerCase()))
+            )
+        if (targets.length === 0 && allShapes.length > 0) {
+          targets = allShapes.slice(-1)
+        }
+
+        const speedMultiplier = speed === 'fast' ? 1.85 : speed === 'slow' ? 0.55 : 1.0
+
+        let orbitCenterShape =
+          allShapes.find((s) => s.id === orbitCenterShapeId) ??
+          (orbitCenterLabel
+            ? allShapes.find((s) =>
+                extractLabelFromShape(editor, s)
+                  .toLowerCase()
+                  .includes(orbitCenterLabel.toLowerCase())
+              )
+            : undefined)
+
+        if (animationType === 'orbit' && !orbitCenterShape && applyToAll && allShapes.length > 1) {
+          orbitCenterShape =
+            allShapes.find((s) => s.props?.geo === 'hexagon') ?? allShapes[0]
+        }
+
+        if (animationType === 'orbit' && orbitCenterShape && applyToAll && targets.length > 1) {
+          targets = targets.filter((t) => t.id !== orbitCenterShape.id)
+        }
+
+        const centerBounds = orbitCenterShape
+          ? editor.getShapePageBounds(orbitCenterShape.id)
+          : undefined
+        const orbitCx = centerBounds ? centerBounds.x + centerBounds.w / 2 : cx
+        const orbitCy = centerBounds ? centerBounds.y + centerBounds.h / 2 : cy
+
+        targets.forEach((s, idx) => {
+          const existingAnim = activeAnimationsRef.current.get(s.id)
+          const bounds = editor.getShapePageBounds(s.id)
+          const baseX = existingAnim?.baseX ?? s.x ?? 0
+          const baseY = existingAnim?.baseY ?? s.y ?? 0
+          const w = bounds?.w ?? s.props?.w ?? 200
+          const h = bounds?.h ?? s.props?.h ?? 110
+          const scx = baseX + w / 2
+          const scy = baseY + h / 2
+          const dx = scx - orbitCx
+          const dy = scy - orbitCy
+          const dist = Math.hypot(dx, dy)
+          const orbitRadius = dist > 60 ? dist : 260 + idx * 45
+          const orbitBaseAngle =
+            dist > 60 ? Math.atan2(dy, dx) : (idx / Math.max(1, targets.length)) * Math.PI * 2
+
+          activeAnimationsRef.current.set(s.id, {
+            shapeId: s.id,
+            shapeType: s.type,
+            mode: animationType,
+            speedMultiplier,
+            phaseOffset: idx * 0.85,
+            baseX,
+            baseY,
+            w,
+            h,
+            baseRotation: existingAnim?.baseRotation ?? (s.rotation ?? 0),
+            baseOpacity: 0.94,
+            color: s.props?.color,
+            orbitCenterX: orbitCx,
+            orbitCenterY: orbitCy,
+            orbitRadius,
+            orbitBaseAngle,
+            orbitCenterShapeId: orbitCenterShape?.id,
+          })
+
+          spawnWatercolorBloom(editor, baseX, baseY, w, h, s.props?.color)
+        })
+
+        setAnimStatus({
+          count: activeAnimationsRef.current.size,
+          mode: animationType,
+        })
       } else if (cmd.intent === 'undo_redo') {
         if (cmd.historyOp === 'redo') editor.redo()
         else editor.undo()
@@ -1716,7 +1994,7 @@ function App() {
               font: 'draw',
               size: 's',
               richText: toRichText(
-                '4. ARRANGE, EXPORT & EDIT\n• "Export canvas to image" / "Save as SVG"\n• "Arrange all shapes in a circle"\n• "Frame all shapes as Studio Board"\n• "Undo that" / "Clear the canvas"'
+                '4. ANIMATE, EXPORT & ARRANGE\n• "Make all shapes float" / "Animate data flow"\n• "Spin Speak to Paint" / "Stop animations"\n• "Export canvas to image" / "Save as SVG"\n• "Arrange all shapes in a circle"'
               ),
             },
           } as any)
@@ -1801,6 +2079,27 @@ function App() {
             animateWatercolorWashOnShape(editor, n.id, n.type, 'semi')
           }, 120 + idx * 140)
         })
+
+        // Start a gentle ambient breathing float on the central hub after initial wash settles
+        setTimeout(() => {
+          if (editor.getShape(idHub)) {
+            activeAnimationsRef.current.set(idHub, {
+              shapeId: idHub,
+              shapeType: 'geo',
+              mode: 'float',
+              speedMultiplier: 0.65,
+              phaseOffset: 0,
+              baseX: hubNode.x,
+              baseY: hubNode.y,
+              w: hubNode.w,
+              h: hubNode.h,
+              baseRotation: 0,
+              baseOpacity: 0.94,
+              color: 'violet',
+            })
+            setAnimStatus({ count: 1, mode: 'float' })
+          }
+        }, 1250)
       }
     },
     [spawnWatercolorBloom]
@@ -1921,6 +2220,11 @@ function App() {
           </div>
 
           <div className="model-telemetry">
+            {animStatus && animStatus.count > 0 && (
+              <span className="anim-chip">
+                ✦ {animStatus.count} {animStatus.mode}
+              </span>
+            )}
             <span className="theme-chip">{activeTheme.name}</span>
             <span className={`engine-dot ${mlReady ? 'gpu-ready' : 'warming'}`} />
             <span className="engine-label">
