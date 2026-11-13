@@ -1,0 +1,478 @@
+{
+  "model": "onnx-community/embeddinggemma-2-ONNX",
+  "dimensions": 768,
+  "mrlDimensions": [
+    256,
+    768
+  ],
+  "entries": [
+    {
+      "index": 0,
+      "group": "intent",
+      "id": "intent-create-single",
+      "subkind": "create_shape"
+    },
+    {
+      "index": 1,
+      "group": "intent",
+      "id": "intent-compose-architecture",
+      "subkind": "compose_layout"
+    },
+    {
+      "index": 2,
+      "group": "intent",
+      "id": "intent-apply-aesthetic",
+      "subkind": "apply_aesthetic"
+    },
+    {
+      "index": 3,
+      "group": "intent",
+      "id": "intent-connect",
+      "subkind": "connect_shapes"
+    },
+    {
+      "index": 4,
+      "group": "intent",
+      "id": "intent-style-color",
+      "subkind": "style_color"
+    },
+    {
+      "index": 5,
+      "group": "intent",
+      "id": "intent-style-stroke-fill",
+      "subkind": "style_stroke_fill"
+    },
+    {
+      "index": 6,
+      "group": "intent",
+      "id": "intent-move",
+      "subkind": "transform_move"
+    },
+    {
+      "index": 7,
+      "group": "intent",
+      "id": "intent-move-relative",
+      "subkind": "transform_move_relative"
+    },
+    {
+      "index": 8,
+      "group": "intent",
+      "id": "intent-swap",
+      "subkind": "transform_swap"
+    },
+    {
+      "index": 9,
+      "group": "intent",
+      "id": "intent-animate",
+      "subkind": "animate_shapes"
+    },
+    {
+      "index": 10,
+      "group": "intent",
+      "id": "intent-stop-animation",
+      "subkind": "stop_animation"
+    },
+    {
+      "index": 11,
+      "group": "intent",
+      "id": "intent-lock",
+      "subkind": "lock_shapes"
+    },
+    {
+      "index": 12,
+      "group": "intent",
+      "id": "intent-unlock",
+      "subkind": "unlock_shapes"
+    },
+    {
+      "index": 13,
+      "group": "intent",
+      "id": "intent-scale",
+      "subkind": "transform_scale"
+    },
+    {
+      "index": 14,
+      "group": "intent",
+      "id": "intent-arrange",
+      "subkind": "transform_arrange"
+    },
+    {
+      "index": 15,
+      "group": "intent",
+      "id": "intent-duplicate",
+      "subkind": "transform_duplicate"
+    },
+    {
+      "index": 16,
+      "group": "intent",
+      "id": "intent-edit-label",
+      "subkind": "edit_label"
+    },
+    {
+      "index": 17,
+      "group": "intent",
+      "id": "intent-select",
+      "subkind": "select_target"
+    },
+    {
+      "index": 18,
+      "group": "intent",
+      "id": "intent-delete",
+      "subkind": "delete_shapes"
+    },
+    {
+      "index": 19,
+      "group": "intent",
+      "id": "intent-clear",
+      "subkind": "clear_canvas"
+    },
+    {
+      "index": 20,
+      "group": "intent",
+      "id": "intent-undo",
+      "subkind": "history_undo"
+    },
+    {
+      "index": 21,
+      "group": "intent",
+      "id": "intent-redo",
+      "subkind": "history_redo"
+    },
+    {
+      "index": 22,
+      "group": "intent",
+      "id": "intent-zoom-in",
+      "subkind": "camera_zoom_in"
+    },
+    {
+      "index": 23,
+      "group": "intent",
+      "id": "intent-zoom-out",
+      "subkind": "camera_zoom_out"
+    },
+    {
+      "index": 24,
+      "group": "intent",
+      "id": "intent-camera-fit",
+      "subkind": "camera_fit"
+    },
+    {
+      "index": 25,
+      "group": "aesthetic",
+      "id": "bauhaus-archive",
+      "subkind": "WEIMAR WERKBUND"
+    },
+    {
+      "index": 26,
+      "group": "aesthetic",
+      "id": "kyoto-washi",
+      "subkind": "KYOTO SUMI & WASHI"
+    },
+    {
+      "index": 27,
+      "group": "aesthetic",
+      "id": "swiss-grid",
+      "subkind": "BASEL KUNSTHALLE"
+    },
+    {
+      "index": 28,
+      "group": "aesthetic",
+      "id": "cyanotype-blueprint",
+      "subkind": "ATELIER CYANOTYPE"
+    },
+    {
+      "index": 29,
+      "group": "aesthetic",
+      "id": "obsidian-monolith",
+      "subkind": "OBSIDIAN MONOLITH"
+    },
+    {
+      "index": 30,
+      "group": "aesthetic",
+      "id": "travertine-editorial",
+      "subkind": "MILAN TRAVERTINE"
+    },
+    {
+      "index": 31,
+      "group": "aesthetic",
+      "id": "chalkboard-atelier",
+      "subkind": "ECOLE BLACKBOARD"
+    },
+    {
+      "index": 32,
+      "group": "aesthetic",
+      "id": "rams-industrial",
+      "subkind": "KRONBERG INDUSTRIAL"
+    },
+    {
+      "index": 33,
+      "group": "blueprint",
+      "id": "architecture",
+      "subkind": "architecture"
+    },
+    {
+      "index": 34,
+      "group": "blueprint",
+      "id": "flowchart",
+      "subkind": "flowchart"
+    },
+    {
+      "index": 35,
+      "group": "blueprint",
+      "id": "mindmap",
+      "subkind": "mindmap"
+    },
+    {
+      "index": 36,
+      "group": "blueprint",
+      "id": "kanban",
+      "subkind": "kanban"
+    },
+    {
+      "index": 37,
+      "group": "blueprint",
+      "id": "quadrant",
+      "subkind": "quadrant"
+    },
+    {
+      "index": 38,
+      "group": "blueprint",
+      "id": "timeline",
+      "subkind": "timeline"
+    },
+    {
+      "index": 39,
+      "group": "blueprint",
+      "id": "bento",
+      "subkind": "bento"
+    },
+    {
+      "index": 40,
+      "group": "blueprint",
+      "id": "row",
+      "subkind": "row"
+    },
+    {
+      "index": 41,
+      "group": "blueprint",
+      "id": "column",
+      "subkind": "column"
+    },
+    {
+      "index": 42,
+      "group": "archetype",
+      "id": "arch-card",
+      "subkind": "geo"
+    },
+    {
+      "index": 43,
+      "group": "archetype",
+      "id": "arch-circle",
+      "subkind": "geo"
+    },
+    {
+      "index": 44,
+      "group": "archetype",
+      "id": "arch-pill",
+      "subkind": "geo"
+    },
+    {
+      "index": 45,
+      "group": "archetype",
+      "id": "arch-diamond",
+      "subkind": "geo"
+    },
+    {
+      "index": 46,
+      "group": "archetype",
+      "id": "arch-hexagon",
+      "subkind": "geo"
+    },
+    {
+      "index": 47,
+      "group": "archetype",
+      "id": "arch-database",
+      "subkind": "geo"
+    },
+    {
+      "index": 48,
+      "group": "archetype",
+      "id": "arch-cloud",
+      "subkind": "geo"
+    },
+    {
+      "index": 49,
+      "group": "archetype",
+      "id": "arch-triangle",
+      "subkind": "geo"
+    },
+    {
+      "index": 50,
+      "group": "archetype",
+      "id": "arch-star",
+      "subkind": "geo"
+    },
+    {
+      "index": 51,
+      "group": "archetype",
+      "id": "arch-heart",
+      "subkind": "geo"
+    },
+    {
+      "index": 52,
+      "group": "archetype",
+      "id": "arch-sticky",
+      "subkind": "note"
+    },
+    {
+      "index": 53,
+      "group": "archetype",
+      "id": "arch-text",
+      "subkind": "text"
+    },
+    {
+      "index": 54,
+      "group": "archetype",
+      "id": "arch-frame",
+      "subkind": "frame"
+    },
+    {
+      "index": 55,
+      "group": "color",
+      "id": "col-black",
+      "subkind": "black"
+    },
+    {
+      "index": 56,
+      "group": "color",
+      "id": "col-grey",
+      "subkind": "grey"
+    },
+    {
+      "index": 57,
+      "group": "color",
+      "id": "col-white",
+      "subkind": "white"
+    },
+    {
+      "index": 58,
+      "group": "color",
+      "id": "col-red",
+      "subkind": "red"
+    },
+    {
+      "index": 59,
+      "group": "color",
+      "id": "col-light-red",
+      "subkind": "light-red"
+    },
+    {
+      "index": 60,
+      "group": "color",
+      "id": "col-orange",
+      "subkind": "orange"
+    },
+    {
+      "index": 61,
+      "group": "color",
+      "id": "col-yellow",
+      "subkind": "yellow"
+    },
+    {
+      "index": 62,
+      "group": "color",
+      "id": "col-green",
+      "subkind": "green"
+    },
+    {
+      "index": 63,
+      "group": "color",
+      "id": "col-light-green",
+      "subkind": "light-green"
+    },
+    {
+      "index": 64,
+      "group": "color",
+      "id": "col-blue",
+      "subkind": "blue"
+    },
+    {
+      "index": 65,
+      "group": "color",
+      "id": "col-light-blue",
+      "subkind": "light-blue"
+    },
+    {
+      "index": 66,
+      "group": "color",
+      "id": "col-violet",
+      "subkind": "violet"
+    },
+    {
+      "index": 67,
+      "group": "color",
+      "id": "col-light-violet",
+      "subkind": "light-violet"
+    },
+    {
+      "index": 68,
+      "group": "animation",
+      "id": "anim-float",
+      "subkind": "float"
+    },
+    {
+      "index": 69,
+      "group": "animation",
+      "id": "anim-orbit",
+      "subkind": "orbit"
+    },
+    {
+      "index": 70,
+      "group": "animation",
+      "id": "anim-pulse",
+      "subkind": "pulse"
+    },
+    {
+      "index": 71,
+      "group": "animation",
+      "id": "anim-spin",
+      "subkind": "spin"
+    },
+    {
+      "index": 72,
+      "group": "animation",
+      "id": "anim-bounce",
+      "subkind": "bounce"
+    },
+    {
+      "index": 73,
+      "group": "animation",
+      "id": "anim-wiggle",
+      "subkind": "wiggle"
+    },
+    {
+      "index": 74,
+      "group": "animation",
+      "id": "anim-pendulum",
+      "subkind": "pendulum"
+    },
+    {
+      "index": 75,
+      "group": "animation",
+      "id": "anim-figure8",
+      "subkind": "figure8"
+    },
+    {
+      "index": 76,
+      "group": "animation",
+      "id": "anim-drift",
+      "subkind": "drift"
+    },
+    {
+      "index": 77,
+      "group": "animation",
+      "id": "anim-stop",
+      "subkind": "stop"
+    }
+  ]
+}

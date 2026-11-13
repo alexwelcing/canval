@@ -1,0 +1,295 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  background: var(--room-bg, #121110);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ---------------- Modern Art Frame Architecture (Zero Buttons, Zero Glow Shaders) ---------------- */
+
+.gallery-room {
+  width: 100%;
+  height: 100dvh;
+  padding: max(4px, env(safe-area-inset-top)) max(4px, env(safe-area-inset-right))
+    max(4px, env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+  background: var(--room-bg);
+  display: flex;
+  transition: background-color 420ms ease;
+}
+
+.art-frame-moulding {
+  position: relative;
+  flex: 1;
+  display: flex;
+  padding: 8px;
+  background: linear-gradient(
+    145deg,
+    var(--moulding-face) 0%,
+    var(--moulding-outer) 100%
+  );
+  border: 1px solid var(--moulding-outer);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35),
+    0 12px 32px rgba(0, 0, 0, 0.45);
+  transition:
+    background 420ms ease,
+    border-color 420ms ease;
+}
+
+/* 45-degree corner joinery miter hairlines */
+.miter {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  pointer-events: none;
+  z-index: 3;
+}
+.miter-tl {
+  top: 0;
+  left: 0;
+  background: linear-gradient(45deg, transparent 47%, var(--miter-line) 50%, transparent 53%);
+}
+.miter-tr {
+  top: 0;
+  right: 0;
+  background: linear-gradient(-45deg, transparent 47%, var(--miter-line) 50%, transparent 53%);
+}
+.miter-bl {
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(-45deg, transparent 47%, var(--miter-line) 50%, transparent 53%);
+}
+.miter-br {
+  bottom: 0;
+  right: 0;
+  background: linear-gradient(45deg, transparent 47%, var(--miter-line) 50%, transparent 53%);
+}
+
+/* Archival Passe-Partout Mat Board */
+.passe-partout-mat {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--mat-paper);
+  background-image: radial-gradient(rgba(0, 0, 0, 0.028) 0.75px, transparent 0.75px);
+  background-size: 6px 6px;
+  border: 1px solid var(--moulding-inner-lip);
+  padding: 12px 11px 0 11px;
+  transition:
+    background-color 420ms ease,
+    border-color 420ms ease;
+}
+
+/* Recessed 45-deg Bevel Cut Window Opening around Canvas */
+.canvas-aperture {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  border-top: 2px solid var(--inner-bevel-top);
+  border-left: 2px solid var(--inner-bevel-top);
+  border-right: 2px solid var(--inner-bevel-bottom);
+  border-bottom: 2px solid var(--inner-bevel-bottom);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  background: var(--canvas-paper);
+  transition:
+    background-color 420ms ease,
+    border-color 420ms ease;
+}
+
+/* Top bevel 1px loading rule (disappears completely when models are ready) */
+.archive-load-rule {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 2px;
+  background: var(--accent-tick);
+  z-index: 20;
+  pointer-events: none;
+  transition: width 240ms ease, opacity 360ms ease;
+}
+
+/* Sync tldraw canvas surface to the active Gallery Edition's archival paper */
+.canvas-aperture .tl-container,
+.canvas-aperture .tl-background {
+  background-color: var(--canvas-paper) !important;
+  transition: background-color 420ms ease;
+}
+
+/* Hide any stray tldraw selection/watermark chrome if present */
+.canvas-aperture .tlui-layout {
+  display: none !important;
+}
+
+/* Museum Exhibition Title Sheet (dissolves permanently on first touch anywhere) */
+.opening-vellum-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  text-align: center;
+  background: color-mix(in srgb, var(--canvas-paper) 90%, transparent);
+  cursor: pointer;
+}
+
+.opening-catalogue-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--placard-muted);
+  margin-bottom: 14px;
+}
+
+.opening-serif-heading {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-weight: 400;
+  font-size: clamp(32px, 8vw, 52px);
+  line-height: 1.06;
+  color: var(--placard-ink);
+  margin: 0 0 14px 0;
+  letter-spacing: -0.01em;
+}
+
+.opening-serif-sub {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-style: italic;
+  font-size: clamp(17px, 4.2vw, 22px);
+  line-height: 1.35;
+  color: var(--placard-muted);
+  max-width: 320px;
+  margin: 0 0 24px 0;
+}
+
+.opening-hairline {
+  width: 36px;
+  height: 1px;
+  background: var(--placard-rule);
+  margin-bottom: 16px;
+}
+
+.opening-instruction {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--placard-ink);
+}
+
+/* Bottom Passe-Partout Museum Placard Inscription (Non-interactive Mat Typography) */
+.mat-plinth {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.mat-inscription-stream {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-size: 17px;
+  line-height: 1.2;
+  color: var(--placard-ink);
+}
+
+.word-confirmed {
+  color: var(--placard-ink);
+}
+
+.word-speaking {
+  font-style: italic;
+  color: var(--placard-muted);
+}
+
+.word-ghost {
+  font-style: italic;
+  color: var(--placard-ghost);
+}
+
+.mat-whisper {
+  font-family: 'Instrument Serif', Georgia, serif;
+  font-style: italic;
+  font-size: 15px;
+  color: var(--placard-muted);
+}
+
+.mat-edition-plate {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--placard-muted);
+}
+
+/* Crisp mechanical 1px acoustic needle (no blur, no glow) */
+.acoustic-needle-track {
+  width: 2px;
+  height: 13px;
+  background: var(--placard-rule);
+  display: flex;
+  align-items: flex-end;
+}
+
+.acoustic-needle-fill {
+  width: 100%;
+  background: var(--accent-tick);
+  transition: height 75ms linear;
+}
+
+@media (min-width: 768px) {
+  .gallery-room {
+    padding: 16px;
+  }
+  .art-frame-moulding {
+    padding: 13px;
+  }
+  .miter {
+    width: 14px;
+    height: 14px;
+  }
+  .passe-partout-mat {
+    padding: 22px 24px 0 24px;
+  }
+  .mat-plinth {
+    height: 52px;
+  }
+  .mat-inscription-stream {
+    font-size: 19px;
+  }
+  .mat-edition-plate {
+    font-size: 10.5px;
+  }
+}
