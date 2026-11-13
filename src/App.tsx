@@ -10,7 +10,11 @@ import {
   type DirectorResult,
 } from './canvas/canvasDirector';
 import { extractEntityPairHints } from './canvas/slotParser';
-import { startMobileMicrophone, type MicSession } from './audio/micCapture';
+import {
+  startMobileMicrophone,
+  type MicHardwareState,
+  type MicSession,
+} from './audio/micCapture';
 import type {
   EarlybirdTranscriptUpdate,
   EarlybirdWorkerIn,
@@ -31,6 +35,11 @@ declare global {
   }
 }
 
+type MicUiState = 'idle' | 'requesting' | 'live' | 'suspended' | 'denied';
+
+const VU_BAR_COUNT = 12;
+const IDLE_VU_BARS = Array.from({ length: VU_BAR_COUNT }, () => 14);
+
 function detectMobileConstrainedDevice(): boolean {
   if (typeof navigator === 'undefined') return false;
   const ua = navigator.userAgent || '';
@@ -41,10 +50,18 @@ function detectMobileConstrainedDevice(): boolean {
   return false;
 }
 
+function computePerceptualBarPct(peakLevel: number): number {
+  const clamped = Math.min(1, Math.max(0, peakLevel * 4.6));
+  const curved = Math.pow(clamped, 0.58);
+  return Math.min(100, Math.max(22, Math.round(22 + curved * 78)));
+}
+
 export function App() {
   const [edition, setEdition] = useState<AestheticEdition>(AESTHETIC_EDITIONS[0]);
   const [roomEntered, setRoomEntered] = useState(false);
-  const [micActive, setMicActive] = useState(false);
+  const [micState, setMicState] = useState<MicUiState>('idle');
+  const [activationStampSeq, setActivationStampSeq] = useState(0);
+  const [vuBars, setVuBars] = useState<number[]>(IDLE_VU_BARS);
 
   const [ebProgress, setEbProgress] = useState(0);
   const [gemmaProgress, setGemmaProgress] = useState(0);
@@ -76,12 +93,18 @@ export function App() {
   const gemmaWorkerRef = useRef<Worker | null>(null);
   const stateWorkerRef = useRef<Worker | null>(null);
   const micSessionRef = useRef<MicSession | null>(null);
+  const micStartingRef = useRef(false);
+  const micStateRef = useRef<MicUiState>('idle');
+  micStateRef.current = micState;
+
   const directorRef = useRef(new CanvasDirector());
 
   const reqCounterRef = useRef(1);
   const manualUttCounterRef = useRef(10000);
   const lastSpecKeyRef = useRef('');
   const fadeTimerRef = useRef<number | null>(null);
+  const stampTimerRef = useRef<number | null>(null);
+  const [showLiveStamp, setShowLiveStamp] = useState(false);
   const pendingSpeakResolversRef = useRef<Map<number, (res: DirectorResult | null) => void>>(
     new Map(),
   );
@@ -89,6 +112,25 @@ export function App() {
   const localProgress = Math.round(ebProgress * 0.36 + gemmaProgress * 0.44 + stateProgress * 0.2);
   const totalProgress = cloudStudioReady ? 100 : localProgress;
   const modelsReady = (cloudStudioReady && stateReady) || (ebReady && gemmaReady && stateReady);
+
+  const pushVuLevel = useCallback((lvl: number) => {
+    setRmsLevel(lvl);
+    const pct = computePerceptualBarPct(lvl);
+    setVuBars((prev) => {
+      const next = prev.slice(1);
+      next.push(pct);
+      return next;
+    });
+  }, []);
+
+  const flashLiveActivationStamp = useCallback(() => {
+    setActivationStampSeq((s) => s + 1);
+    setShowLiveStamp(true);
+    if (stampTimerRef.current) window.clearTimeout(stampTimerRef.current);
+    stampTimerRef.current = window.setTimeout(() => {
+      setShowLiveStamp(false);
+    }, 2850);
+  }, []);
 
   const syncShapesToGemma = useCallback(() => {
     const editor = editorRef.current;
@@ -194,7 +236,6 @@ export function App() {
       sourceHint?: string | null;
       targetHint?: string | null;
     }) => {
-      // 1. Prefer local WebGPU/WASM EmbeddingGemma 2 worker if already hot in RAM
       if (localGemmaReadyRef.current && gemmaWorkerRef.current) {
         const msg: GemmaWorkerIn = {
           type: 'resolve',
@@ -204,7 +245,6 @@ export function App() {
         return;
       }
 
-      // 2. Otherwise use Cloud Run's hot C++ EmbeddingGemma 2 (`/api/voice/resolve`) for 0-second mobile response!
       const editor = editorRef.current;
       const shapes = editor ? collectCanvasShapeSummaries(editor) : [];
       try {
@@ -333,7 +373,6 @@ export function App() {
     [resolveViaBestEngine],
   );
 
-  // Expose programmatic E2E hooks (`window.voiceCanvasSpeak`, `window.voiceCanvasHarmonize`)
   useEffect(() => {
     window.voiceCanvasSpeak = speakProgrammatically;
     window.voiceCanvasHarmonize = triggerVisionHarmonize;
@@ -390,7 +429,6 @@ export function App() {
     const baseUrl = window.location.origin;
     const isMobileConstrained = detectMobileConstrainedDevice();
 
-    // Always boot lightweight State Computer Worker (connects to `/api/state-computer` on mobile, or WebGPU Qwen on desktop)
     const stateWorker = new Worker(new URL('./workers/state.worker.ts', import.meta.url), {
       type: 'module',
     });
@@ -463,7 +501,7 @@ export function App() {
           setEbProgress(100);
           setEbReady(true);
         } else if (msg.type === 'level') {
-          setRmsLevel(msg.lvl);
+          pushVuLevel(msg.lvl);
         } else if (msg.type === 'error') {
           if (!cloudReadyRef.current) setErrorMsg(msg.message);
         } else if (msg.type === 'update') {
@@ -492,7 +530,6 @@ export function App() {
       gemmaWorker.postMessage({ type: 'init', baseUrl } satisfies GemmaWorkerIn);
     };
 
-    // Connect to Cloud Run `/ws/voice` for instant 0-MB-download mobile startup
     const connectStudioSocket = () => {
       if (cancelled) return;
       try {
@@ -507,10 +544,6 @@ export function App() {
           }
         }, 1600);
 
-        ws.onopen = () => {
-          // Wait for 'ready' packet confirming Earlybird session is initialized
-        };
-
         ws.onmessage = (ev) => {
           if (typeof ev.data !== 'string') return;
           try {
@@ -523,7 +556,6 @@ export function App() {
               setGemmaProgress(100);
               setEbReady(true);
               setGemmaReady(true);
-              // On desktop with WebGPU, also warm local Gemma in background for sub-12ms offline resilience
               if (!isMobileConstrained) {
                 bootLocalSpeechAndGemmaWorkers();
               }
@@ -572,33 +604,55 @@ export function App() {
   }, [
     handleResolvedSemantics,
     handleTranscriptUpdate,
+    pushVuLevel,
     syncShapesToGemma,
     triggerVisionHarmonize,
   ]);
 
-  // Keep AudioContext awake across mobile lock/unlock or tab focus
-  useEffect(() => {
-    const wake = () => {
-      void micSessionRef.current?.resumeIfNeeded();
-    };
-    window.addEventListener('pointerdown', wake, { passive: true });
-    document.addEventListener('visibilitychange', wake);
-    return () => {
-      window.removeEventListener('pointerdown', wake);
-      document.removeEventListener('visibilitychange', wake);
-    };
-  }, []);
+  const handleHardwareMicState = useCallback(
+    (hw: MicHardwareState) => {
+      if (hw === 'live') {
+        const wasNotLive = micStateRef.current !== 'live';
+        setMicState('live');
+        setRoomEntered(true);
+        setErrorMsg(null);
+        if (wasNotLive) {
+          flashLiveActivationStamp();
+        }
+      } else if (hw === 'suspended') {
+        setMicState('suspended');
+        setRmsLevel(0);
+        setVuBars(IDLE_VU_BARS);
+      } else if (hw === 'ended') {
+        micSessionRef.current = null;
+        setMicState('suspended');
+        setRmsLevel(0);
+        setVuBars(IDLE_VU_BARS);
+      }
+    },
+    [flashLiveActivationStamp],
+  );
 
-  const handleEnterRoom = useCallback(async () => {
-    setRoomEntered(true);
+  const activateMicrophone = useCallback(async () => {
     setErrorMsg(null);
-    if (micSessionRef.current) {
-      await micSessionRef.current.resumeIfNeeded();
-      return;
+
+    if (micSessionRef.current?.isAlive()) {
+      const resumed = await micSessionRef.current.resumeIfNeeded();
+      if (resumed) {
+        setRoomEntered(true);
+        return;
+      }
+      micSessionRef.current.stop();
+      micSessionRef.current = null;
     }
+
+    if (micStartingRef.current) return;
+    micStartingRef.current = true;
+    setMicState('requesting');
+
     try {
       const session = await startMobileMicrophone((pcm, lvl) => {
-        setRmsLevel(lvl);
+        pushVuLevel(lvl);
         const ws = wsRef.current;
         if (ws && ws.readyState === WebSocket.OPEN && cloudReadyRef.current) {
           ws.send(pcm.buffer as ArrayBuffer);
@@ -609,13 +663,53 @@ export function App() {
           const msg: EarlybirdWorkerIn = { type: 'audio', pcm, lvl };
           w.postMessage(msg, [pcm.buffer]);
         }
-      });
+      }, handleHardwareMicState);
+
       micSessionRef.current = session;
-      setMicActive(true);
+      // Fallback veil dismissal if AudioWorklet takes >300ms for first 1280-sample chunk
+      window.setTimeout(() => {
+        setRoomEntered(true);
+      }, 300);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Microphone access declined — type to speak');
+      setMicState('denied');
+      setRoomEntered(true);
+      setRmsLevel(0);
+      setVuBars(IDLE_VU_BARS);
+      setErrorMsg(
+        err instanceof Error && /https/i.test(err.message)
+          ? err.message
+          : 'Microphone blocked — allow mic access or touch canvas to retry',
+      );
+    } finally {
+      micStartingRef.current = false;
     }
-  }, []);
+  }, [handleHardwareMicState, pushVuLevel]);
+
+  // Any trusted tap/click on the canvas automatically arms or resumes a paused/unarmed microphone
+  useEffect(() => {
+    const onUserGesture = () => {
+      if (micSessionRef.current?.isAlive()) {
+        void micSessionRef.current.resumeIfNeeded();
+        return;
+      }
+      if (!micStartingRef.current && micStateRef.current !== 'live') {
+        void activateMicrophone();
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible' && micSessionRef.current?.isAlive()) {
+        void micSessionRef.current.resumeIfNeeded();
+      }
+    };
+    window.addEventListener('click', onUserGesture, { capture: true, passive: true });
+    window.addEventListener('touchend', onUserGesture, { capture: true, passive: true });
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('click', onUserGesture, { capture: true });
+      window.removeEventListener('touchend', onUserGesture, { capture: true });
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [activateMicrophone]);
 
   const handleCanvasMount = useCallback(
     (editor: Editor) => {
@@ -670,9 +764,34 @@ export function App() {
     [edition],
   );
 
-  const needleHeightPct = micActive
-    ? Math.min(100, Math.max(16, Math.round(rmsLevel * 420)))
-    : 12;
+  const isHearingVoice =
+    micState === 'live' &&
+    (rmsLevel >= 0.022 ||
+      Boolean(
+        liveUpdate &&
+          !liveUpdate.isFinal &&
+          (liveUpdate.words.length > 0 || liveUpdate.ghost.length > 0),
+      ));
+
+  const tallyStateClass =
+    micState === 'live'
+      ? isHearingVoice
+        ? 'state-hearing'
+        : 'state-live'
+      : `state-${micState}`;
+
+  const tallyLabel =
+    micState === 'live'
+      ? isHearingVoice
+        ? 'HEARING VOICE'
+        : 'ON AIR · MIC LIVE'
+      : micState === 'requesting'
+        ? 'ARMING MIC · ALLOW ACCESS…'
+        : micState === 'suspended'
+          ? 'MIC PAUSED · TOUCH CANVAS'
+          : micState === 'denied'
+            ? 'MIC BLOCKED · TOUCH TO RETRY'
+            : 'MIC OFF · TOUCH CANVAS TO START';
 
   return (
     <div className="gallery-room" style={frameVars}>
@@ -683,7 +802,31 @@ export function App() {
         <span className="miter miter-br" />
 
         <div className="passe-partout-mat">
-          <div className="canvas-aperture">
+          {/* Upper Passe-Partout Studio Tally + 12-Bar Mechanical Oscillograph */}
+          <div className="mat-header-strip" aria-live="polite">
+            <div className={`mic-tally-plate ${tallyStateClass}`}>
+              <span className="mic-reticle">
+                <span className="mic-reticle-core" />
+              </span>
+              <span>{tallyLabel}</span>
+            </div>
+
+            <div
+              className={`vu-oscillograph${micState === 'live' ? ' is-live' : ''}${isHearingVoice ? ' is-hearing' : ''}`}
+              aria-hidden="true"
+            >
+              {vuBars.map((barPct, idx) => (
+                <div key={idx} className="vu-bar-track">
+                  <div
+                    className="vu-bar-fill"
+                    style={{ height: `${micState === 'live' ? barPct : 14}%` }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className={`canvas-aperture${isHearingVoice ? ' is-hearing' : ''}`}>
             <div
               className="archive-load-rule"
               style={{
@@ -692,10 +835,23 @@ export function App() {
               }}
             />
 
+            {showLiveStamp && (
+              <div key={activationStampSeq} className="mic-live-banner">
+                <span className="mic-live-banner-dot" />
+                <span>MICROPHONE LIVE · SPEAK FREELY</span>
+              </div>
+            )}
+
             <Tldraw hideUi onMount={handleCanvasMount} />
 
             {!roomEntered && (
-              <div className="opening-vellum-veil" onPointerDown={handleEnterRoom}>
+              <div
+                className="opening-vellum-veil"
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  void activateMicrophone();
+                }}
+              >
                 <div className="opening-catalogue-tag">
                   CAVALS · EARLYBIRD 29M + GEMMA 2 + QWEN STATE
                 </div>
@@ -705,9 +861,18 @@ export function App() {
                 </p>
                 <div className="opening-hairline" />
                 <div className="opening-instruction">
-                  {modelsReady
-                    ? 'Touch anywhere on the canvas to listen'
-                    : `Preparing studio models (${totalProgress}%) · Touch to arm`}
+                  <span className={`mic-tally-plate ${tallyStateClass}`}>
+                    <span className="mic-reticle">
+                      <span className="mic-reticle-core" />
+                    </span>
+                  </span>
+                  <span>
+                    {micState === 'requesting'
+                      ? 'Allow microphone access in your browser…'
+                      : modelsReady
+                        ? 'Touch anywhere on the canvas to activate microphone'
+                        : `Preparing studio (${totalProgress}%) · Touch to activate mic`}
+                  </span>
                 </div>
               </div>
             )}
@@ -745,8 +910,12 @@ export function App() {
                     </span>
                   ))}
                 </>
-              ) : !roomEntered ? (
-                <span className="mat-whisper">Touch the canvas once to open microphone</span>
+              ) : micState === 'requesting' ? (
+                <span className="mat-whisper">Waiting for microphone permission…</span>
+              ) : micState !== 'live' ? (
+                <span className="mat-whisper">
+                  Microphone inactive — touch anywhere on the canvas to listen
+                </span>
               ) : lastInscription ? (
                 <span className="mat-whisper">{lastInscription}</span>
               ) : (
@@ -757,9 +926,6 @@ export function App() {
             </div>
 
             <div className="mat-edition-plate">
-              <div className="acoustic-needle-track">
-                <div className="acoustic-needle-fill" style={{ height: `${needleHeightPct}%` }} />
-              </div>
               <span>
                 {activeAnims > 0 ? `${activeAnims} KINETIC · ` : ''}
                 {edition.catalogueNumber} · {edition.title}

@@ -59,21 +59,64 @@ class EarlybirdCaptureProcessor extends AudioWorkletProcessor {
 registerProcessor('earlybird-cap', EarlybirdCaptureProcessor);
 `;
 
+export type MicHardwareState = 'live' | 'suspended' | 'ended';
+
 export interface MicSession {
-  resumeIfNeeded: () => Promise<void>;
+  isAlive: () => boolean;
+  resumeIfNeeded: () => Promise<boolean>;
   stop: () => void;
+}
+
+/**
+ * Subtle studio activation tone (two-note Braun/Nagra fifth: 528 Hz -> 792 Hz, 95ms total)
+ * played once when hardware PCM frames actually begin flowing.
+ */
+function playActivationTone(ctx: AudioContext): void {
+  try {
+    const now = ctx.currentTime;
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(0.0001, now);
+    master.gain.exponentialRampToValueAtTime(0.045, now + 0.012);
+    master.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+    master.connect(ctx.destination);
+
+    const osc1 = ctx.createOscillator();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(528, now);
+    osc1.frequency.setValueAtTime(792, now + 0.048);
+    osc1.connect(master);
+    osc1.start(now);
+    osc1.stop(now + 0.115);
+  } catch {
+    // Ignore if audio output is muted by device switch
+  }
 }
 
 export async function startMobileMicrophone(
   onChunk: (pcm: Float32Array, lvl: number) => void,
+  onStateChange?: (state: MicHardwareState) => void,
 ): Promise<MicSession> {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error(
-      'Microphone requires HTTPS on mobile browsers. Open the https:// URL shown in your terminal.',
+      'Microphone requires HTTPS on mobile browsers. Open https://cavals.alexwelcing.com',
     );
   }
 
-  const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  // Acquire hardware mic stream FIRST inside the user gesture before constructing AudioContext
+  // (avoids iOS Safari sample-rate mismatch & suspended source bugs).
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
+
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+
   let ctx: AudioContext;
   try {
     ctx = new AudioCtx({ sampleRate: 16000, latencyHint: 'interactive' });
@@ -85,15 +128,6 @@ export async function startMobileMicrophone(
     await ctx.resume();
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
-
   const blobUrl = URL.createObjectURL(new Blob([WORKLET_CODE], { type: 'application/javascript' }));
   try {
     await ctx.audioWorklet.addModule(blobUrl);
@@ -104,24 +138,79 @@ export async function startMobileMicrophone(
   const source = ctx.createMediaStreamSource(stream);
   const workletNode = new AudioWorkletNode(ctx, 'earlybird-cap');
 
+  // Connect worklet through a 0-gain sink to ctx.destination so iOS WebKit & Android Chrome
+  // continuously pull audio quantum blocks from EarlybirdCaptureProcessor.
+  const silentSink = ctx.createGain();
+  silentSink.gain.value = 0;
+  source.connect(workletNode);
+  workletNode.connect(silentSink);
+  silentSink.connect(ctx.destination);
+
+  let firstFrameSeen = false;
+  const primaryTrack = stream.getAudioTracks()[0];
+
+  const notifyHardwareState = () => {
+    if (!primaryTrack || primaryTrack.readyState === 'ended') {
+      onStateChange?.('ended');
+      return;
+    }
+    if (ctx.state !== 'running' || primaryTrack.muted) {
+      onStateChange?.('suspended');
+      return;
+    }
+    if (firstFrameSeen) {
+      onStateChange?.('live');
+    }
+  };
+
+  ctx.addEventListener('statechange', notifyHardwareState);
+  if (primaryTrack) {
+    primaryTrack.addEventListener('ended', () => onStateChange?.('ended'));
+    primaryTrack.addEventListener('mute', () => onStateChange?.('suspended'));
+    primaryTrack.addEventListener('unmute', () => {
+      if (firstFrameSeen && ctx.state === 'running') onStateChange?.('live');
+    });
+  }
+
   workletNode.port.onmessage = (ev: MessageEvent<{ pcm: Float32Array; lvl: number }>) => {
+    if (!firstFrameSeen) {
+      firstFrameSeen = true;
+      try {
+        navigator.vibrate?.(12);
+      } catch {
+        // ignore if vibrate unsupported
+      }
+      playActivationTone(ctx);
+      onStateChange?.('live');
+    }
     onChunk(ev.data.pcm, ev.data.lvl);
   };
 
-  source.connect(workletNode);
   if (ctx.state === 'suspended') {
     await ctx.resume();
   }
 
   return {
+    isAlive: () =>
+      Boolean(primaryTrack && primaryTrack.readyState === 'live' && ctx.state !== 'closed'),
     resumeIfNeeded: async () => {
+      if (!primaryTrack || primaryTrack.readyState === 'ended' || ctx.state === 'closed') {
+        onStateChange?.('ended');
+        return false;
+      }
       if (ctx.state === 'suspended') {
         await ctx.resume();
       }
+      const running = ctx.state === 'running';
+      if (running && firstFrameSeen) {
+        onStateChange?.('live');
+      }
+      return running;
     },
     stop: () => {
       try {
         workletNode.disconnect();
+        silentSink.disconnect();
         source.disconnect();
         void ctx.close();
       } catch {

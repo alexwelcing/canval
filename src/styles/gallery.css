@@ -91,10 +91,172 @@ body,
   background-image: radial-gradient(rgba(0, 0, 0, 0.028) 0.75px, transparent 0.75px);
   background-size: 6px 6px;
   border: 1px solid var(--moulding-inner-lip);
-  padding: 12px 11px 0 11px;
+  padding: 0 11px 0 11px;
   transition:
     background-color 420ms ease,
     border-color 420ms ease;
+}
+
+/* Upper Passe-Partout Studio Tally & Mechanical VU Strip (Pure Telemetry, Zero Buttons) */
+.mat-header-strip {
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 3px;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.mic-tally-plate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--placard-muted);
+  white-space: nowrap;
+}
+
+.mic-tally-plate.state-live {
+  color: var(--placard-ink);
+}
+
+.mic-tally-plate.state-hearing {
+  color: var(--accent-tick);
+}
+
+.mic-tally-plate.state-requesting {
+  color: var(--placard-ink);
+}
+
+.mic-tally-plate.state-denied,
+.mic-tally-plate.state-suspended {
+  color: #b83b28;
+}
+
+/* Mechanical reticle + solid signal lamp (strictly crisp geometry, zero blur/glow shaders) */
+.mic-reticle {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--placard-rule);
+  border-radius: 50%;
+}
+
+.mic-reticle-core {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1.5px solid var(--placard-muted);
+}
+
+.state-requesting .mic-reticle {
+  border-color: var(--accent-tick);
+  animation: tally-step-spin 1.1s steps(8, end) infinite;
+  border-top-color: transparent;
+}
+
+.state-requesting .mic-reticle-core {
+  border-color: var(--accent-tick);
+}
+
+.state-live .mic-reticle {
+  border-color: #d9381e;
+  animation: reticle-cadence 2.2s ease-in-out infinite;
+}
+
+.state-live .mic-reticle-core {
+  width: 8px;
+  height: 8px;
+  border: none;
+  background: #d9381e;
+}
+
+.state-hearing .mic-reticle {
+  border-color: #d9381e;
+  border-width: 1.5px;
+  transform: scale(1.08);
+}
+
+.state-hearing .mic-reticle-core {
+  width: 8px;
+  height: 8px;
+  border: none;
+  background: #d9381e;
+}
+
+.state-denied .mic-reticle,
+.state-suspended .mic-reticle {
+  border-radius: 2px;
+  border-color: #b83b28;
+}
+
+.state-denied .mic-reticle-core,
+.state-suspended .mic-reticle-core {
+  width: 6px;
+  height: 2px;
+  border-radius: 0;
+  border: none;
+  background: #b83b28;
+}
+
+@keyframes reticle-cadence {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.48;
+  }
+}
+
+@keyframes tally-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 12-Bar Braun Mechanical Oscillograph / VU Meter */
+.vu-oscillograph {
+  display: flex;
+  align-items: center;
+  gap: 2.5px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.vu-bar-track {
+  width: 2px;
+  height: 14px;
+  background: color-mix(in srgb, var(--placard-rule) 55%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vu-bar-fill {
+  width: 100%;
+  background: var(--placard-muted);
+  transition: height 65ms linear, background-color 90ms linear;
+}
+
+.vu-oscillograph.is-live .vu-bar-fill {
+  background: var(--placard-ink);
+}
+
+.vu-oscillograph.is-hearing .vu-bar-fill {
+  background: #d9381e;
 }
 
 /* Recessed 45-deg Bevel Cut Window Opening around Canvas */
@@ -111,10 +273,15 @@ body,
   background: var(--canvas-paper);
   transition:
     background-color 420ms ease,
-    border-color 420ms ease;
+    border-color 110ms linear;
 }
 
-/* Top bevel 1px loading rule (disappears completely when models are ready) */
+/* Crisp frame bevel response when voice energy is actively captured */
+.canvas-aperture.is-hearing {
+  border-color: var(--accent-tick);
+}
+
+/* Top bevel 2px loading rule (disappears completely when models are ready) */
 .archive-load-rule {
   position: absolute;
   top: 0;
@@ -124,6 +291,54 @@ body,
   z-index: 20;
   pointer-events: none;
   transition: width 240ms ease, opacity 360ms ease;
+}
+
+/* Brief Archival Confirmation Stamp when Microphone Locks Live */
+.mic-live-banner {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 18;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--mat-paper);
+  border: 1px solid var(--placard-ink);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--placard-ink);
+  white-space: nowrap;
+  animation: stamp-fade 2.8s ease forwards;
+}
+
+.mic-live-banner-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d9381e;
+  flex-shrink: 0;
+}
+
+@keyframes stamp-fade {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+  10%,
+  78% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -2px);
+  }
 }
 
 /* Sync tldraw canvas surface to the active Gallery Edition's archival paper */
@@ -138,7 +353,7 @@ body,
   display: none !important;
 }
 
-/* Museum Exhibition Title Sheet (dissolves permanently on first touch anywhere) */
+/* Museum Exhibition Title Sheet (dissolves once microphone is live or dismissed) */
 .opening-vellum-veil {
   position: absolute;
   inset: 0;
@@ -149,7 +364,7 @@ body,
   justify-content: center;
   padding: 28px;
   text-align: center;
-  background: color-mix(in srgb, var(--canvas-paper) 90%, transparent);
+  background: color-mix(in srgb, var(--canvas-paper) 92%, transparent);
   cursor: pointer;
 }
 
@@ -190,8 +405,12 @@ body,
 }
 
 .opening-instruction {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
+  font-size: 10.5px;
+  font-weight: 600;
   letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--placard-ink);
@@ -254,21 +473,6 @@ body,
   color: var(--placard-muted);
 }
 
-/* Crisp mechanical 1px acoustic needle (no blur, no glow) */
-.acoustic-needle-track {
-  width: 2px;
-  height: 13px;
-  background: var(--placard-rule);
-  display: flex;
-  align-items: flex-end;
-}
-
-.acoustic-needle-fill {
-  width: 100%;
-  background: var(--accent-tick);
-  transition: height 75ms linear;
-}
-
 @media (min-width: 768px) {
   .gallery-room {
     padding: 16px;
@@ -281,7 +485,13 @@ body,
     height: 14px;
   }
   .passe-partout-mat {
-    padding: 22px 24px 0 24px;
+    padding: 0 24px 0 24px;
+  }
+  .mat-header-strip {
+    height: 38px;
+  }
+  .mic-tally-plate {
+    font-size: 10.5px;
   }
   .mat-plinth {
     height: 52px;
