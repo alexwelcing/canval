@@ -53,8 +53,9 @@ let bank256 = new Float32Array(0);
 let manifest: BankManifestEntry[] = [];
 let ready = false;
 
-// Live canvas shape embeddings cached by normalized descriptor string
+// Live canvas shape embeddings + 512-entry LRU query cache for <0.1ms repeat/shorthand hits
 const labelEmbedCache = new Map<string, { vec768: Float32Array; vec256: Float32Array }>();
+const queryEmbedCache = new Map<string, { vec768: Float32Array; vec256: Float32Array }>();
 let currentShapes: CanvasShapeSummary[] = [];
 
 async function detectDevice(): Promise<'webgpu' | 'wasm'> {
@@ -71,6 +72,13 @@ async function detectDevice(): Promise<'webgpu' | 'wasm'> {
 }
 
 async function embedRaw(formattedText: string): Promise<{ vec768: Float32Array; vec256: Float32Array }> {
+  const cached = queryEmbedCache.get(formattedText);
+  if (cached) {
+    queryEmbedCache.delete(formattedText);
+    queryEmbedCache.set(formattedText, cached);
+    return cached;
+  }
+
   const inputs = await tokenizer(formattedText, { padding: true, truncation: true });
   const out = await model(inputs);
   const raw = Float32Array.from(out.sentence_embedding.data as Float32Array);
@@ -84,7 +92,13 @@ async function embedRaw(formattedText: string): Promise<{ vec768: Float32Array; 
   }
   const vec768 = l2Normalize(raw, DIM_FULL);
   const vec256 = l2Normalize(vec768, DIM_MRL);
-  return { vec768, vec256 };
+  const entry = { vec768, vec256 };
+  if (queryEmbedCache.size >= 512) {
+    const oldest = queryEmbedCache.keys().next().value;
+    if (oldest !== undefined) queryEmbedCache.delete(oldest);
+  }
+  queryEmbedCache.set(formattedText, entry);
+  return entry;
 }
 
 async function initEngine(baseUrl: string) {
@@ -162,14 +176,23 @@ function shapeCacheKey(s: CanvasShapeSummary): string {
 async function syncCanvasShapes(shapes: CanvasShapeSummary[]) {
   currentShapes = shapes;
   if (!ready) return;
+  const missing: { key: string; s: CanvasShapeSummary }[] = [];
+  const seen = new Set<string>();
   for (const s of shapes) {
     const key = shapeCacheKey(s);
-    if (!labelEmbedCache.has(key)) {
+    if (!labelEmbedCache.has(key) && !seen.has(key)) {
+      seen.add(key);
+      missing.push({ key, s });
+    }
+  }
+  if (missing.length === 0) return;
+  await Promise.all(
+    missing.map(async ({ key, s }) => {
       const desc = `${s.color} ${s.shapeType} ${s.label.trim()}`.trim();
       const vecs = await embedRaw(`title: ${s.label.trim() || s.shapeType} | text: ${desc}`);
       labelEmbedCache.set(key, vecs);
-    }
-  }
+    }),
+  );
 }
 
 function scoreGroup(

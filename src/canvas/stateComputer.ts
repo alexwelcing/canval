@@ -13,6 +13,7 @@ import {
   hasExplicitUndoConsent,
   isPureFillerOrNoise,
   parseVoiceSlots,
+  splitCompoundClauses,
 } from './slotParser.ts';
 
 export interface ChatMessage {
@@ -22,20 +23,18 @@ export interface ChatMessage {
 
 export function serializeRegisterState(snapshot: CanvasRegisterSnapshot): string {
   if (snapshot.shapes.length === 0) {
-    return `REG: [] | FOCUS: [] | THEME: ${snapshot.editionId}`;
+    return `REG:[] FOCUS:[] THEME:${snapshot.editionId}`;
   }
-  const items = snapshot.shapes.slice(-14).map((s) => {
-    const flags = [
-      s.anim ? `anim=${s.anim}` : '',
-      s.locked ? 'locked' : '',
-    ]
-      .filter(Boolean)
-      .join(' ');
-    return `${s.reg}:${s.shapeType} "${s.label}" ${s.color} @(${s.x},${s.y})${flags ? ' ' + flags : ''}`;
+  const items = snapshot.shapes.slice(-12).map((s) => {
+    const flags = [s.anim ? `~${s.anim}` : '', s.locked ? '!' : ''].filter(Boolean).join('');
+    return `${s.reg}:${s.shapeType}"${s.label}"(${s.color})@${s.x},${s.y}${flags}`;
   });
-  return `REG: [${items.join(', ')}] | FOCUS: [${snapshot.focusRegs.join(',')}] | ANIMS: ${snapshot.activeAnimations}`;
+  return `REG:[${items.join(' ')}] FOCUS:[${snapshot.focusRegs.join(',')}] ANIMS:${snapshot.activeAnimations}`;
 }
 
+/**
+ * Compact ~110-token prompt for Qwen2.5-0.5B-Instruct (3.5x faster prefill than verbose ChatML).
+ */
 export function buildStateComputerMessages(
   snapshot: CanvasRegisterSnapshot,
   voiceText: string,
@@ -45,48 +44,26 @@ export function buildStateComputerMessages(
     {
       role: 'system',
       content:
-        'You are the Canvas State Computer. Compile STATE + CMD into ONE short instruction line. ' +
-        'Valid instructions: NOOP | SPAWN | LAYOUT <architecture|flowchart|mindmap|kanban|quadrant|timeline|bento|row|column> | ' +
-        'MOVE <reg|ALL|FOCUS> <left|right|up|down|center|top-left|top|top-right|bottom-left|bottom|bottom-right> | ' +
-        'PLACE <reg> <above|below|left-of|right-of|near> <refReg> | SWAP <regA> <regB> | ' +
-        'ANIM <reg|ALL|FOCUS> <orbit|float|pulse|spin|bounce|wiggle|pendulum|figure8|drift> [aroundReg] | ' +
-        'TEMPO <reg|ALL> <faster|slower|reverse> | STOP <reg|ALL> | CONNECT <regA> <regB> | CONNECT ALL | ' +
-        'COLOR <reg|ALL|FOCUS> <color> | STYLE <reg|ALL|FOCUS> | SCALE <reg|FOCUS> <up|down> | ' +
-        'ARRANGE <row|column|grid> | DUP <reg|FOCUS> | LABEL <reg|FOCUS> | LOCK <reg|ALL|FOCUS> | UNLOCK <reg|ALL|FOCUS> | ' +
-        'DEL <reg|FOCUS> | CLEAR | THEME | HARMONIZE | UNDO | REDO | CAM <zoom_in|zoom_out|fit>. ' +
-        'CRITICAL RULE: Output NOOP for filler/noise/comments. NEVER output DEL, CLEAR, or UNDO unless CMD explicitly says delete, remove, erase, clear canvas, or undo.',
+        'Canvas State Computer. Emit ONE RISC opcode: NOOP | SPAWN | LAYOUT <kind> | MOVE <reg|ALL|FOCUS> <left|right|up|down|center> | ' +
+        'PLACE <reg> <above|below|left-of|right-of> <refReg> | SWAP <regA> <regB> | ' +
+        'ANIM <reg|ALL|FOCUS> <orbit|float|pulse|spin|bounce|wiggle|pendulum|figure8|drift> [refReg] | ' +
+        'STOP <reg|ALL> | CONNECT <regA> <regB> | COLOR <reg|ALL> <color> | SCALE <reg> <up|down> | ' +
+        'ROTATE <reg> <deg> | ALIGN <mode> | FRAME <label> | DEL <reg> | CLEAR | THEME | HARMONIZE | UNDO | REDO. ' +
+        'NEVER emit DEL/CLEAR/UNDO unless explicitly requested.',
     },
     {
       role: 'user',
-      content:
-        'REG: [s1:ellipse "Moon" grey @(180,0), s2:ellipse "Earth" blue @(0,0)] | FOCUS: [s1] | ANIMS: 0\nCMD: make the moon orbit around the earth',
+      content: 'REG:[s1:ellipse"Sun"(yellow)@0,0 s2:ellipse"Earth"(blue)@180,0] FOCUS:[s2] ANIMS:0\nCMD:make earth orbit around sun',
     },
-    { role: 'assistant', content: 'ANIM s1 orbit s2' },
+    { role: 'assistant', content: 'ANIM s2 orbit s1' },
     {
       role: 'user',
-      content:
-        'REG: [s1:rectangle "Client" blue @(-200,0), s2:hexagon "Gateway" black @(0,0), s3:trapezoid "Database" violet @(200,0)] | FOCUS: [s3] | ANIMS: 0\nCMD: move the database above the gateway',
+      content: 'REG:[s1:hexagon"Gateway"(black)@0,0 s2:trapezoid"DB"(violet)@200,0] FOCUS:[s2] ANIMS:0\nCMD:put DB above Gateway',
     },
-    { role: 'assistant', content: 'PLACE s3 above s2' },
+    { role: 'assistant', content: 'PLACE s2 above s1' },
     {
       role: 'user',
-      content: 'REG: [s1:rectangle "Sketch" black @(0,0)] | FOCUS: [s1] | ANIMS: 0\nCMD: uh okay yeah nice',
-    },
-    { role: 'assistant', content: 'NOOP' },
-    {
-      role: 'user',
-      content:
-        'REG: [s1:star "North Star" yellow @(-120,0), s2:note "Draft Memo" orange @(140,0)] | FOCUS: [s2] | ANIMS: 0\nCMD: remove the draft memo',
-    },
-    { role: 'assistant', content: 'DEL s2' },
-    {
-      role: 'user',
-      content: 'REG: [s1:diamond "Core" red @(0,0) anim=spin] | FOCUS: [s1] | ANIMS: 1\nCMD: stop spinning',
-    },
-    { role: 'assistant', content: 'STOP ALL' },
-    {
-      role: 'user',
-      content: `${regDump}\nCMD: ${voiceText.trim()}`,
+      content: `${regDump}\nCMD:${voiceText.trim()}`,
     },
   ];
 }
@@ -94,23 +71,47 @@ export function buildStateComputerMessages(
 const SHAPE_SYNONYMS: Record<string, string[]> = {
   rectangle: ['box', 'rectangle', 'card', 'square', 'block', 'panel'],
   ellipse: ['circle', 'orb', 'sphere', 'ball', 'round', 'dot', 'moon', 'sun', 'planet'],
-  oval: ['pill', 'oval', 'capsule', 'badge'],
-  diamond: ['diamond', 'rhombus', 'decision', 'router'],
-  hexagon: ['hexagon', 'hex', 'polygon', 'engine'],
+  oval: ['pill', 'oval', 'capsule', 'badge', 'button'],
+  diamond: ['diamond', 'decision', 'router'],
+  rhombus: ['parallelogram', 'rhombus', 'queue', 'buffer'],
+  hexagon: ['hexagon', 'hex', 'polygon', 'engine', 'microservice'],
+  octagon: ['octagon', 'firewall', 'stop'],
+  pentagon: ['pentagon', 'shield', 'crest'],
   trapezoid: ['trapezoid', 'database', 'storage', 'bucket'],
-  cloud: ['cloud'],
+  cloud: ['cloud', 'cdn', 'internet'],
   triangle: ['triangle', 'pyramid'],
   star: ['star', 'spark'],
   heart: ['heart'],
+  'arrow-right': ['chevron', 'banner'],
+  'check-box': ['checkbox', 'todo'],
+  'x-box': ['blocker'],
   note: ['note', 'sticky', 'memo', 'post-it', 'post it'],
   text: ['text', 'title', 'heading', 'label', 'caption'],
   frame: ['frame', 'artboard'],
 };
 
-/**
- * Resolves spoken shape descriptors ("the blue circle", "leftmost shape", "everything", "alpha")
- * against the live Canvas Register File + EmbeddingGemma 2 vector matches.
- */
+const VALID_BLUEPRINTS = new Set<BlueprintKind>([
+  'architecture',
+  'flowchart',
+  'mindmap',
+  'kanban',
+  'quadrant',
+  'timeline',
+  'bento',
+  'cycle',
+  'tree',
+  'venn',
+  'funnel',
+  'neural',
+  'orbit_system',
+  'wireframe',
+  'state_machine',
+  'layers',
+  'comparison',
+  'row',
+  'column',
+]);
+
 export function resolveRegisterTargets(
   rawText: string,
   snapshot: CanvasRegisterSnapshot,
@@ -121,11 +122,15 @@ export function resolveRegisterTargets(
   const shapes = snapshot.shapes;
   if (shapes.length === 0) return [];
 
-  if (qwenToken === 'ALL' || /\b(all(?:\s+of\s+them|\s+shapes)?|everything|every\s+shape|everybody|whole\s+thing)\b/i.test(lower)) {
+  if (
+    qwenToken === 'ALL' ||
+    /\b(all(?:\s+of\s+them|\s+shapes|\s+cards|\s+nodes)?|everything|every\s+shape|everybody|whole\s+thing)\b/i.test(
+      lower,
+    )
+  ) {
     return ['ALL'];
   }
 
-  // 1. Check positional superlatives ("leftmost", "rightmost", "top", "bottom", "first", "last")
   if (/\b(leftmost|furthest\s+left)\b/.test(lower)) {
     const sorted = [...shapes].sort((a, b) => a.x - b.x);
     return [sorted[0].reg];
@@ -149,7 +154,6 @@ export function resolveRegisterTargets(
     return [shapes[shapes.length - 1].reg];
   }
 
-  // 2. Check exact label substring or color + geometry filter
   const labelHits = shapes.filter((s) => {
     const lbl = s.label.trim().toLowerCase();
     return lbl.length >= 2 && lower.includes(lbl);
@@ -158,9 +162,9 @@ export function resolveRegisterTargets(
     return labelHits.map((s) => s.reg);
   }
 
-  // Color + Shape type match (e.g. "the red circle", "blue boxes")
   let candidates = shapes;
-  const colorFilter = res.color && res.colorScore >= 0.62 ? res.color : null;
+  const slots = parseVoiceSlots(rawText);
+  const colorFilter = slots.explicitColor ?? (res.color && res.colorScore >= 0.62 ? res.color : null);
   if (colorFilter && !/\b(make|paint|turn|color|tint)\b/.test(lower)) {
     const byCol = candidates.filter((s) => s.color === colorFilter || s.color.includes(colorFilter));
     if (byCol.length > 0) candidates = byCol;
@@ -181,13 +185,11 @@ export function resolveRegisterTargets(
     return candidates.map((s) => s.reg);
   }
 
-  // 3. Explicit register token emitted by Qwen ("s1", "s2")
   if (qwenToken && /^s\d+$/i.test(qwenToken)) {
     const found = shapes.find((s) => s.reg.toLowerCase() === qwenToken.toLowerCase());
     if (found) return [found.reg];
   }
 
-  // 4. High-confidence EmbeddingGemma 2 label match
   if (res.sourceMatch && res.sourceMatch.score >= 0.58) {
     return [res.sourceMatch.reg];
   }
@@ -195,7 +197,6 @@ export function resolveRegisterTargets(
     return [res.matchedShapes[0].reg];
   }
 
-  // 5. Fallback to FOCUS register (most recently created/selected shapes)
   if (snapshot.focusRegs.length > 0) {
     return snapshot.focusRegs;
   }
@@ -205,6 +206,7 @@ export function resolveRegisterTargets(
 function resolvePairRegisters(
   snapshot: CanvasRegisterSnapshot,
   res: SemanticResolution,
+  rawClauseText: string,
   qwenA?: string | null,
   qwenB?: string | null,
 ): { regA: string; regB: string } | null {
@@ -225,7 +227,7 @@ function resolvePairRegisters(
     return undefined;
   };
 
-  const slots = parseVoiceSlots(res.rawText);
+  const slots = parseVoiceSlots(rawClauseText);
   let a = findByHint(slots.sourceHint)?.reg ?? res.sourceMatch?.reg ?? null;
   let b = findByHint(slots.targetHint)?.reg ?? res.targetMatch?.reg ?? null;
 
@@ -242,24 +244,25 @@ function resolvePairRegisters(
 }
 
 /**
- *Deterministic Register ALU fallback + Supervisor Verifier:
- * Parses Qwen's RISC opcode line (if provided) AND cross-verifies against
- * EmbeddingGemma 2 semantic scores + Explicit Destructive Consent Locks.
+ * Compiles a single atomic utterance/clause into a verified CanvasSyscall.
  */
 export function compileVerifiedSyscall(
   rawOpcodeLine: string | null,
   snapshot: CanvasRegisterSnapshot,
   res: SemanticResolution,
+  clauseOverrideText?: string,
 ): { opcodeLine: string; syscall: CanvasSyscall } {
-  // Gate 0: Filler / breath / noise filter
-  if (isPureFillerOrNoise(res.rawText, res.words)) {
+  const clauseText = clauseOverrideText ?? res.rawText;
+  const isSubClause = Boolean(clauseOverrideText && clauseOverrideText !== res.rawText);
+
+  if (isPureFillerOrNoise(clauseText, isSubClause ? [] : res.words)) {
     return {
       opcodeLine: 'NOOP (acoustic-filler)',
       syscall: { op: 'NOOP', reason: 'Filtered ambient filler' },
     };
   }
 
-  const slots = parseVoiceSlots(res.rawText, res.ghostText);
+  const slots = parseVoiceSlots(clauseText, isSubClause ? '' : res.ghostText);
   const cleanLine = (rawOpcodeLine ?? '')
     .replace(/^(OUT:|STATE:|CMD:)\s*/i, '')
     .split('\n')[0]
@@ -267,14 +270,14 @@ export function compileVerifiedSyscall(
   const parts = cleanLine.split(/\s+/).filter(Boolean);
   const head = (parts[0] ?? '').toUpperCase();
 
-  // 1. Check explicit Tempo / Speed adjustments on active animations ("faster", "slower", "reverse")
+  // 1. Tempo adjustments on active animations ("faster", "slower", "reverse")
   if (
     snapshot.activeAnimations > 0 &&
     (slots.tempoMultiplier !== null || slots.reverseAnimation) &&
     !slots.animationKind &&
     !/\b(draw|create|add|move|scale|bigger|smaller)\b/i.test(slots.cleanText)
   ) {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
       opcodeLine: `TEMPO ${targets.join(',')} x${slots.tempoMultiplier ?? 1}`,
       syscall: {
@@ -286,22 +289,22 @@ export function compileVerifiedSyscall(
     };
   }
 
-  // 2. Determine primary action from Qwen Opcode + Lexical + EmbeddingGemma 2
-  const effectiveIntent = slots.lexicalIntent ?? res.intentKind;
+  // In a multi-clause sentence, rely on each sub-clause's lexical intent first so clauses don't bleed into one another!
+  const effectiveIntent = slots.lexicalIntent ?? (isSubClause ? 'create_shape' : res.intentKind);
 
-  // Handle STOP animation
+  // STOP animation
   if (head === 'STOP' || effectiveIntent === 'stop_animation' || slots.animationKind === 'stop') {
     const targets =
       parts[1]?.toUpperCase() === 'ALL' || snapshot.shapes.length <= 1
         ? ['ALL']
-        : resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+        : resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
       opcodeLine: `STOP ${targets.join(',')}`,
       syscall: { op: 'STOP_ANIM', targets },
     };
   }
 
-  // Handle ANIMATE (`ANIM` / `SPIN` / `ORBIT` / `FLOAT` / `PULSE` / `BOUNCE`)
+  // ANIMATE
   const directAnimVerbs: Record<string, Exclude<CatalogAnimationKind, 'stop'>> = {
     ORBIT: 'orbit',
     FLOAT: 'float',
@@ -318,7 +321,7 @@ export function compileVerifiedSyscall(
     head === 'ANIM' ||
     head in directAnimVerbs ||
     effectiveIntent === 'animate_shapes' ||
-    slots.animationKind !== null
+    (slots.animationKind !== null && slots.lexicalIntent === 'animate_shapes')
   ) {
     const qwenAnim =
       head in directAnimVerbs
@@ -348,33 +351,34 @@ export function compileVerifiedSyscall(
     ) as Exclude<CatalogAnimationKind, 'stop'>;
 
     if (chosenKind === 'orbit' && (slots.targetHint || parts[3] || res.targetMatch)) {
-      const pair = resolvePairRegisters(snapshot, res, parts[1], parts[3]);
-      if (pair) {
-        return {
-          opcodeLine: `ANIM ${pair.regA} orbit ${pair.regB}`,
-          syscall: {
-            op: 'ANIM',
-            targets: [pair.regA],
-            kind: 'orbit',
-            aroundReg: pair.regB,
-            speed: slots.tempoMultiplier ?? 1,
-            intensity: 1,
-            direction: slots.reverseAnimation ? 'ccw' : 'cw',
-          },
-        };
-      }
+      const pair = resolvePairRegisters(snapshot, res, clauseText, parts[1], parts[3]);
+      return {
+        opcodeLine: `ANIM ${pair?.regA ?? slots.sourceHint ?? 'FOCUS'} orbit ${pair?.regB ?? slots.targetHint ?? 'ANCHOR'}`,
+        syscall: {
+          op: 'ANIM',
+          targets: pair ? [pair.regA] : ['FOCUS'],
+          kind: 'orbit',
+          aroundReg: pair?.regB ?? null,
+          targetLabelHint: slots.sourceHint,
+          aroundLabelHint: slots.targetHint,
+          speed: slots.tempoMultiplier ?? 1,
+          intensity: 1,
+          direction: slots.reverseAnimation ? 'ccw' : 'cw',
+        },
+      };
     }
 
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
-      opcodeLine: `ANIM ${targets.join(',')} ${chosenKind}`,
+      opcodeLine: `ANIM ${targets.join(',') || 'FOCUS'} ${chosenKind}`,
       syscall: {
         op: 'ANIM',
-        targets,
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        targetLabelHint: slots.sourceHint ?? slots.singleLabel,
         kind: chosenKind,
         speed: slots.tempoMultiplier ?? 1,
         intensity: 1,
-        direction: /\bvertical|up\s+and\s+down\b/i.test(res.rawText)
+        direction: /\bvertical|up\s+and\s+down\b/i.test(clauseText)
           ? 'vertical'
           : slots.reverseAnimation
             ? 'ccw'
@@ -383,9 +387,9 @@ export function compileVerifiedSyscall(
     };
   }
 
-  // Handle SWAP
+  // SWAP
   if (head === 'SWAP' || effectiveIntent === 'transform_swap') {
-    const pair = resolvePairRegisters(snapshot, res, parts[1], parts[2]);
+    const pair = resolvePairRegisters(snapshot, res, clauseText, parts[1], parts[2]);
     if (pair) {
       return {
         opcodeLine: `SWAP ${pair.regA} ${pair.regB}`,
@@ -394,40 +398,120 @@ export function compileVerifiedSyscall(
     }
   }
 
-  // Handle HARMONIZE ("harmonize the canvas", "critique the composition", "curate layout")
+  // HARMONIZE
   if (head === 'HARMONIZE' || effectiveIntent === 'vision_harmonize') {
     return {
       opcodeLine: 'HARMONIZE',
-      syscall: { op: 'HARMONIZE', goalPrompt: res.rawText },
+      syscall: { op: 'HARMONIZE', goalPrompt: clauseText },
     };
   }
 
-  // Handle RELATIVE PLACEMENT ("move X above/below/left-of/right-of Y" or Qwen "MOVE s2 ABOVE s1")
+  // FRAME GROUP ("put a frame around everything called Sprint 1")
+  if (head === 'FRAME' || effectiveIntent === 'frame_group') {
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    return {
+      opcodeLine: `FRAME ${slots.frameGroupLabel ?? 'Group'}`,
+      syscall: {
+        op: 'FRAME_GROUP',
+        targets: targets.length > 0 ? targets : ['ALL'],
+        label: slots.frameGroupLabel,
+      },
+    };
+  }
+
+  // ALIGN / DISTRIBUTE
+  if (head === 'ALIGN' || effectiveIntent === 'transform_align_distribute') {
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    const mode = slots.alignMode ?? 'center-horizontal';
+    return {
+      opcodeLine: `ALIGN ${mode}`,
+      syscall: {
+        op: 'ALIGN',
+        targets: targets.length >= 2 ? targets : ['ALL'],
+        mode,
+      },
+    };
+  }
+
+  // ROTATE
+  if (head === 'ROTATE' || effectiveIntent === 'transform_rotate') {
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    const deg = slots.rotationDegrees ?? 45;
+    return {
+      opcodeLine: `ROTATE ${targets.join(',') || 'FOCUS'} ${deg}`,
+      syscall: {
+        op: 'ROTATE',
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        degrees: deg,
+        absolute: slots.rotationAbsolute,
+      },
+    };
+  }
+
+  // STYLE ARROWS
+  if (head === 'ARROWS' || effectiveIntent === 'style_arrows') {
+    return {
+      opcodeLine: `ARROWS ${slots.arrowKindOverride ?? slots.dashOverride ?? 'reverse'}`,
+      syscall: {
+        op: 'STYLE_ARROWS',
+        kind: slots.arrowKindOverride,
+        dash: slots.dashOverride,
+        reverse: slots.reverseArrows,
+      },
+    };
+  }
+
+  // Z-ORDER
+  if (head === 'ZORDER' || effectiveIntent === 'z_order') {
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    return {
+      opcodeLine: `ZORDER ${slots.zOrder ?? 'front'}`,
+      syscall: {
+        op: 'Z_ORDER',
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        order: slots.zOrder ?? 'front',
+      },
+    };
+  }
+
+  // RELATIVE PLACEMENT
   const qwenRelCandidate = parts[2]?.toLowerCase() as SpatialRelation | undefined;
   const validRel = new Set<SpatialRelation>(['above', 'below', 'left-of', 'right-of', 'near']);
   if (
     head === 'PLACE' ||
     (head === 'MOVE' && qwenRelCandidate && validRel.has(qwenRelCandidate) && parts[3]) ||
     effectiveIntent === 'transform_move_relative' ||
-    slots.spatialRelation
+    (slots.spatialRelation && slots.lexicalIntent === 'transform_move_relative')
   ) {
-    const pair = resolvePairRegisters(snapshot, res, parts[1], parts[3]);
+    const pair = resolvePairRegisters(snapshot, res, clauseText, parts[1], parts[3]);
     const relation: SpatialRelation =
-      slots.spatialRelation ?? (qwenRelCandidate && validRel.has(qwenRelCandidate) ? qwenRelCandidate : 'right-of');
-    if (pair) {
+      slots.spatialRelation ??
+      (qwenRelCandidate && validRel.has(qwenRelCandidate) ? qwenRelCandidate : 'right-of');
+    if (pair || (slots.sourceHint && slots.targetHint)) {
       return {
-        opcodeLine: `PLACE ${pair.regA} ${relation} ${pair.regB}`,
-        syscall: { op: 'PLACE', targets: [pair.regA], relation, refReg: pair.regB },
+        opcodeLine: `PLACE ${pair?.regA ?? slots.sourceHint} ${relation} ${pair?.regB ?? slots.targetHint}`,
+        syscall: {
+          op: 'PLACE',
+          targets: pair ? [pair.regA] : ['FOCUS'],
+          relation,
+          refReg: pair?.regB ?? null,
+          targetLabelHint: slots.sourceHint,
+          refLabelHint: slots.targetHint,
+        },
       };
     }
   }
 
-  // Handle MOVE (directional nudge or 9-point viewport anchor)
+  // MOVE
   if (
-    (head === 'MOVE' && (slots.lexicalIntent === 'transform_move' || res.intentKind === 'transform_move' || slots.direction !== null || slots.anchor !== null)) ||
+    (head === 'MOVE' &&
+      (slots.lexicalIntent === 'transform_move' ||
+        res.intentKind === 'transform_move' ||
+        slots.direction !== null ||
+        slots.anchor !== null)) ||
     effectiveIntent === 'transform_move'
   ) {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     const qDir = parts[2]?.toLowerCase();
     const anchor: SpatialAnchor | null =
       slots.anchor ??
@@ -445,10 +529,10 @@ export function compileVerifiedSyscall(
         : 'right');
 
     return {
-      opcodeLine: `MOVE ${targets.join(',')} ${anchor ?? dir} (${slots.moveDistance})`,
+      opcodeLine: `MOVE ${targets.join(',') || 'FOCUS'} ${anchor ?? dir} (${slots.moveDistance})`,
       syscall: {
         op: 'MOVE',
-        targets,
+        targets: targets.length > 0 ? targets : ['FOCUS'],
         dir,
         anchor,
         distance: slots.moveDistance,
@@ -456,9 +540,9 @@ export function compileVerifiedSyscall(
     };
   }
 
-  // HARD CONSENT GATE FOR DESTRUCTIVE OPS: DELETE / CLEAR / UNDO
+  // DESTRUCTIVE CONSENT LOCKS
   if (head === 'CLEAR' || effectiveIntent === 'clear_canvas') {
-    if (!hasExplicitClearConsent(res.rawText, res.words)) {
+    if (!hasExplicitClearConsent(clauseText, isSubClause ? [] : res.words)) {
       return {
         opcodeLine: 'NOOP (blocked unconfirmed CLEAR)',
         syscall: { op: 'NOOP', reason: 'Clear requires explicit spoken phrase' },
@@ -468,13 +552,13 @@ export function compileVerifiedSyscall(
   }
 
   if (head === 'DEL' || head === 'DELETE' || effectiveIntent === 'delete_shapes') {
-    if (!hasExplicitDeleteConsent(res.rawText, res.words)) {
+    if (!hasExplicitDeleteConsent(clauseText, isSubClause ? [] : res.words)) {
       return {
         opcodeLine: 'NOOP (blocked unconfirmed DEL)',
         syscall: { op: 'NOOP', reason: 'Delete requires explicit spoken verb' },
       };
     }
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
       opcodeLine: `DEL ${targets.join(',')}`,
       syscall: { op: 'DELETE', targets },
@@ -482,7 +566,7 @@ export function compileVerifiedSyscall(
   }
 
   if (head === 'UNDO' || effectiveIntent === 'history_undo') {
-    if (!hasExplicitUndoConsent(res.rawText, res.words)) {
+    if (!hasExplicitUndoConsent(clauseText, isSubClause ? [] : res.words)) {
       return {
         opcodeLine: 'NOOP (blocked unconfirmed UNDO)',
         syscall: { op: 'NOOP', reason: 'Undo requires explicit spoken undo' },
@@ -492,7 +576,7 @@ export function compileVerifiedSyscall(
   }
 
   if (head === 'REDO' || effectiveIntent === 'history_redo') {
-    if (!/\b(redo)\b/i.test(res.rawText)) {
+    if (!/\b(redo)\b/i.test(clauseText)) {
       return { opcodeLine: 'NOOP', syscall: { op: 'NOOP', reason: 'Redo gate' } };
     }
     return { opcodeLine: 'REDO', syscall: { op: 'REDO' } };
@@ -500,62 +584,88 @@ export function compileVerifiedSyscall(
 
   // LOCK / UNLOCK
   if (head === 'LOCK' || effectiveIntent === 'lock_shapes') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return { opcodeLine: `LOCK ${targets.join(',')}`, syscall: { op: 'LOCK', targets, locked: true } };
   }
   if (head === 'UNLOCK' || effectiveIntent === 'unlock_shapes') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return { opcodeLine: `UNLOCK ${targets.join(',')}`, syscall: { op: 'LOCK', targets, locked: false } };
   }
 
   // AESTHETIC EDITION
   if (head === 'THEME' || effectiveIntent === 'apply_aesthetic') {
+    const chosenEdition = slots.explicitEditionId ?? res.aestheticId;
     return {
-      opcodeLine: `THEME ${res.aestheticId}`,
-      syscall: { op: 'AESTHETIC', aestheticId: res.aestheticId },
+      opcodeLine: `THEME ${chosenEdition}`,
+      syscall: { op: 'AESTHETIC', aestheticId: chosenEdition },
     };
   }
 
-  // LAYOUT BLUEPRINT vs SPAWN SHAPE
+  // LAYOUT BLUEPRINT
   if (
     head === 'LAYOUT' ||
     effectiveIntent === 'compose_layout' ||
-    (effectiveIntent === 'create_shape' &&
-      res.blueprintScore >= 0.7 &&
+    (!isSubClause &&
+      effectiveIntent === 'create_shape' &&
+      !slots.explicitArchetypeId &&
+      res.blueprintScore >= 0.71 &&
       res.blueprintId !== 'row' &&
       res.blueprintId !== 'column')
   ) {
     const qBp = parts[1]?.toLowerCase() as BlueprintKind | undefined;
-    const validBp = new Set<BlueprintKind>([
-      'architecture',
-      'flowchart',
-      'mindmap',
-      'kanban',
-      'quadrant',
-      'timeline',
-      'bento',
-      'row',
-      'column',
-    ]);
-    const kind = qBp && validBp.has(qBp) ? qBp : res.blueprintId;
+    const kind =
+      slots.explicitBlueprintId ?? (qBp && VALID_BLUEPRINTS.has(qBp) ? qBp : res.blueprintId);
     return {
-      opcodeLine: `LAYOUT ${kind}`,
-      syscall: { op: 'LAYOUT', kind },
+      opcodeLine: `LAYOUT ${kind}${slots.topic ? ` (${slots.topic})` : ''}`,
+      syscall: {
+        op: 'LAYOUT',
+        kind,
+        topic: slots.topic,
+        listLabels: slots.listLabels.length > 0 ? slots.listLabels : undefined,
+        anchor: slots.anchor,
+        color: slots.explicitColor ?? (isSubClause ? null : res.color),
+      },
     };
   }
 
+  // SPAWN SHAPE(S)
   if (
-    (head === 'SPAWN' && res.intentScore >= 0.48) ||
-    (effectiveIntent === 'create_shape' && (res.intentScore >= 0.48 || slots.lexicalIntent === 'create_shape'))
+    (head === 'SPAWN' && res.intentScore >= 0.46) ||
+    (effectiveIntent === 'create_shape' &&
+      (res.intentScore >= 0.46 || slots.lexicalIntent === 'create_shape' || isSubClause))
   ) {
+    const chosenArch = slots.explicitArchetypeId ?? res.archetypeId;
+    const chosenColor = slots.explicitColor ?? (isSubClause ? null : res.color);
     return {
-      opcodeLine: `SPAWN ${res.archetypeId} x${slots.count ?? 1}`,
-      syscall: { op: 'SPAWN', count: slots.count ?? undefined, anchor: slots.anchor },
+      opcodeLine: `SPAWN ${chosenArch} x${slots.listLabels.length || slots.count || 1}`,
+      syscall: {
+        op: 'SPAWN',
+        count: slots.count ?? undefined,
+        anchor: slots.anchor,
+        archetypeId: chosenArch,
+        color: chosenColor,
+        label: slots.singleLabel,
+        listLabels: slots.listLabels.length > 0 ? slots.listLabels : undefined,
+        arrangement: slots.arrangement,
+        connectCreated: slots.connectCreated,
+        sizeOverride: slots.sizeOverride,
+      },
     };
   }
 
-  // CONNECT (supports both existing registers AND auto-materializing missing named endpoints + edge labels!)
+  // CONNECT (including 3+ hop chains & auto-materialized endpoints!)
   if (head === 'CONNECT' || effectiveIntent === 'connect_shapes') {
+    if (slots.chainLabels.length >= 2) {
+      return {
+        opcodeLine: `CONNECT CHAIN (${slots.chainLabels.join(' -> ')})`,
+        syscall: {
+          op: 'CONNECT',
+          chainLabels: slots.chainLabels,
+          edgeLabel: slots.edgeLabel,
+        },
+      };
+    }
+
     if (slots.connectAll || parts[1]?.toUpperCase() === 'ALL') {
       return {
         opcodeLine: 'CONNECT ALL',
@@ -572,7 +682,6 @@ export function compileVerifiedSyscall(
       const shapes = snapshot.shapes.filter((s) => !excludeReg || s.reg !== excludeReg);
       if (hint) {
         const h = hint.trim().toLowerCase();
-        // Pronoun / positional references
         if (/^(it|this|that)$/i.test(h) && shapes.length > 0) {
           const foc = snapshot.focusRegs.find((r) => r !== excludeReg);
           return { reg: foc ?? shapes[shapes.length - 1].reg, label: null };
@@ -586,14 +695,12 @@ export function compileVerifiedSyscall(
         if (/\blast\b/.test(h) && shapes.length > 0) {
           return { reg: shapes[shapes.length - 1].reg, label: null };
         }
-        // Exact or substring label match
         const byLbl = shapes.find((s) => {
           const sl = s.label.trim().toLowerCase();
           return sl.length >= 2 && (h.includes(sl) || sl.includes(h));
         });
         if (byLbl) return { reg: byLbl.reg, label: null };
 
-        // Pure shape-word reference (e.g. "the circle", "the box") without a proper name
         for (const [shapeKey, words] of Object.entries(SHAPE_SYNONYMS)) {
           if (words.some((w) => new RegExp(`^(?:the\\s+)?${w}$`, 'i').test(h))) {
             const hit = shapes.find((s) => s.shapeType === shapeKey);
@@ -601,12 +708,10 @@ export function compileVerifiedSyscall(
           }
         }
 
-        // High-confidence EmbeddingGemma 2 match on canvas
-        if (semMatch && semMatch.score >= 0.72 && semMatch.reg !== excludeReg) {
+        if (!isSubClause && semMatch && semMatch.score >= 0.72 && semMatch.reg !== excludeReg) {
           return { reg: semMatch.reg, label: null };
         }
 
-        // Named concept does not exist on canvas yet -> auto-materialize!
         return { reg: null, label: hint.trim() };
       }
 
@@ -633,7 +738,7 @@ export function compileVerifiedSyscall(
       };
     }
 
-    const pair = resolvePairRegisters(snapshot, res, parts[1], parts[2]);
+    const pair = resolvePairRegisters(snapshot, res, clauseText, parts[1], parts[2]);
     return {
       opcodeLine: pair ? `CONNECT ${pair.regA} -> ${pair.regB}` : 'CONNECT SEQ',
       syscall: {
@@ -647,28 +752,33 @@ export function compileVerifiedSyscall(
 
   // STYLE & COLOR
   if (head === 'COLOR' || effectiveIntent === 'style_color') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    const col = slots.explicitColor ?? res.color;
     return {
-      opcodeLine: `COLOR ${targets.join(',')} ${res.color ?? 'accent'}`,
-      syscall: { op: 'STYLE_COLOR', targets, color: res.color },
+      opcodeLine: `COLOR ${targets.join(',') || 'FOCUS'} ${col ?? 'accent'}`,
+      syscall: { op: 'STYLE_COLOR', targets: targets.length > 0 ? targets : ['FOCUS'], color: col },
     };
   }
 
   if (head === 'STYLE' || effectiveIntent === 'style_stroke_fill') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
-      opcodeLine: `STYLE ${targets.join(',')}`,
-      syscall: { op: 'STYLE_SURFACE', targets },
+      opcodeLine: `STYLE ${targets.join(',') || 'FOCUS'}`,
+      syscall: {
+        op: 'STYLE_SURFACE',
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        sizeOverride: slots.sizeOverride,
+      },
     };
   }
 
   // SCALE / ARRANGE / DUPLICATE / LABEL / SELECT / CAMERA
   if (head === 'SCALE' || effectiveIntent === 'transform_scale') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     const factor = slots.scaleFactor ?? (parts[2] === 'down' ? 0.75 : 1.3);
     return {
-      opcodeLine: `SCALE ${targets.join(',')} x${factor}`,
-      syscall: { op: 'SCALE', targets, factor },
+      opcodeLine: `SCALE ${targets.join(',') || 'FOCUS'} x${factor}`,
+      syscall: { op: 'SCALE', targets: targets.length > 0 ? targets : ['FOCUS'], factor },
     };
   }
 
@@ -680,23 +790,31 @@ export function compileVerifiedSyscall(
   }
 
   if (head === 'DUP' || effectiveIntent === 'transform_duplicate') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
-      opcodeLine: `DUP ${targets.join(',')}`,
-      syscall: { op: 'DUPLICATE', targets },
+      opcodeLine: `DUP ${targets.join(',') || 'FOCUS'} x${slots.count ?? 1}`,
+      syscall: {
+        op: 'DUPLICATE',
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        count: slots.count ?? 1,
+      },
     };
   }
 
   if (head === 'LABEL' || effectiveIntent === 'edit_label') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
-      opcodeLine: `LABEL ${targets.join(',')}`,
-      syscall: { op: 'LABEL', targets, text: slots.singleLabel },
+      opcodeLine: `LABEL ${targets.join(',') || 'FOCUS'}`,
+      syscall: {
+        op: 'LABEL',
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        text: slots.singleLabel,
+      },
     };
   }
 
   if (effectiveIntent === 'select_target') {
-    const targets = resolveRegisterTargets(res.rawText, snapshot, res, parts[1]);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
     return {
       opcodeLine: `SELECT ${targets.join(',')}`,
       syscall: { op: 'SELECT', targets },
@@ -714,15 +832,121 @@ export function compileVerifiedSyscall(
     return { opcodeLine: 'CAM fit', syscall: { op: 'CAMERA', action: 'fit' } };
   }
 
-  if (head === 'NOOP' || (res.intentScore < 0.5 && !slots.lexicalIntent)) {
+  return {
+    opcodeLine: 'NOOP',
+    syscall: { op: 'NOOP', reason: 'Below confidence threshold' },
+  };
+}
+
+/**
+ * Superscalar Multi-Clause Compiler:
+ * Compiles both fast single commands AND rich multi-clause compound sentences in < 0.3ms,
+ * flagging `needsQwenDisambiguation` ONLY when an utterance is genuinely ambiguous.
+ */
+export function compileCompoundSyscalls(
+  rawOpcodeLine: string | null,
+  snapshot: CanvasRegisterSnapshot,
+  res: SemanticResolution,
+): {
+  opcodeLine: string;
+  syscall: CanvasSyscall;
+  syscalls: CanvasSyscall[];
+  needsQwenDisambiguation: boolean;
+} {
+  if (isPureFillerOrNoise(res.rawText, res.words)) {
+    const noop: CanvasSyscall = { op: 'NOOP', reason: 'Filtered filler' };
     return {
       opcodeLine: 'NOOP',
-      syscall: { op: 'NOOP', reason: 'Below confidence threshold' },
+      syscall: noop,
+      syscalls: [noop],
+      needsQwenDisambiguation: false,
+    };
+  }
+
+  const clauses = splitCompoundClauses(res.rawText);
+
+  if (clauses.length <= 1) {
+    const slots = parseVoiceSlots(res.rawText, res.ghostText);
+    const single = compileVerifiedSyscall(rawOpcodeLine, snapshot, res);
+
+    // Also check if the user combined creation + immediate animation in one clause!
+    // e.g. "draw five yellow stars floating" or "add a red diamond spinning"
+    const syscalls: CanvasSyscall[] = [single.syscall];
+    if (
+      (single.syscall.op === 'SPAWN' || single.syscall.op === 'LAYOUT') &&
+      slots.animationKind &&
+      slots.animationKind !== 'stop' &&
+      single.syscall.op !== 'LAYOUT'
+    ) {
+      syscalls.push({
+        op: 'ANIM',
+        targets: ['FOCUS'],
+        kind: slots.animationKind,
+        speed: slots.tempoMultiplier ?? 1,
+        intensity: 1,
+        direction: slots.reverseAnimation ? 'ccw' : 'cw',
+      });
+    }
+
+    const isConfident =
+      single.syscall.op !== 'NOOP' &&
+      (slots.lexicalIntent !== null || res.intentScore >= 0.56 || rawOpcodeLine !== null);
+
+    return {
+      opcodeLine:
+        syscalls.length > 1
+          ? `${single.opcodeLine} ; ANIM FOCUS ${slots.animationKind}`
+          : single.opcodeLine,
+      syscall: syscalls[0],
+      syscalls,
+      needsQwenDisambiguation:
+        !isConfident && snapshot.shapes.length > 0 && rawOpcodeLine === null,
+    };
+  }
+
+  // Multi-clause compound sentence! Compile each clause into an ordered transaction batch
+  const opcodes: string[] = [];
+  const syscalls: CanvasSyscall[] = [];
+
+  for (const clause of clauses) {
+    const cSlots = parseVoiceSlots(clause);
+    const compiled = compileVerifiedSyscall(null, snapshot, res, clause);
+    if (compiled.syscall.op !== 'NOOP') {
+      opcodes.push(compiled.opcodeLine);
+      syscalls.push(compiled.syscall);
+
+      if (
+        compiled.syscall.op === 'SPAWN' &&
+        cSlots.animationKind &&
+        cSlots.animationKind !== 'stop'
+      ) {
+        opcodes.push(`ANIM FOCUS ${cSlots.animationKind}`);
+        syscalls.push({
+          op: 'ANIM',
+          targets: ['FOCUS'],
+          kind: cSlots.animationKind,
+          speed: cSlots.tempoMultiplier ?? 1,
+          intensity: 1,
+          direction: cSlots.reverseAnimation ? 'ccw' : 'cw',
+        });
+      }
+    }
+  }
+
+  if (syscalls.length === 0) {
+    const fallback = compileVerifiedSyscall(rawOpcodeLine, snapshot, res);
+    return {
+      opcodeLine: fallback.opcodeLine,
+      syscall: fallback.syscall,
+      syscalls: [fallback.syscall],
+      needsQwenDisambiguation: fallback.syscall.op === 'NOOP' && rawOpcodeLine === null,
     };
   }
 
   return {
-    opcodeLine: 'NOOP',
-    syscall: { op: 'NOOP', reason: 'Unrecognized state transition' },
+    opcodeLine: opcodes.join(' ; '),
+    syscall: syscalls[0],
+    syscalls,
+    needsQwenDisambiguation: false,
   };
 }

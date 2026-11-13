@@ -61,9 +61,9 @@ class BrowserEarlybirdStream {
   public guessToks: number[] = [];
   public guessProbs: number[] = [];
 
-  private readonly nGuess = 2;
+  private readonly nGuess = 1;
   private readonly tokPerS = 6.5;
-  private readonly minS = 0.24;
+  private readonly minS = 0.16;
 
   async init(baseUrl: string) {
     const cleanBase = baseUrl.replace(/\/$/, '');
@@ -608,7 +608,7 @@ let silenceChunks = 0;
 let utteranceChunks = 0;
 const SPEECH_RMS_ONSET = 0.014;
 const SPEECH_RMS_HOLD = 0.009;
-const SILENCE_CHUNKS_TO_COMMIT = 8; // 8 * 80ms = 640ms pause commits command cleanly
+const SILENCE_CHUNKS_TO_COMMIT = 4; // 4 * 80ms = 320ms crisp pause commits command cleanly
 const MAX_UTTERANCE_CHUNKS = 180; // 14.4s max continuous utterance before auto-commit
 let preRollChunks: Float32Array[] = [];
 
@@ -669,8 +669,12 @@ async function drainAudioQueue() {
       const ghost = engine.getWords(engine.guessToks, engine.guessProbs);
       const text = engine.decodePieces(engine.hyp);
 
+      const autoClauseCommit =
+        utteranceChunks >= 38 && silenceChunks >= 2 && words.length >= 3;
+
       const shouldCommit =
-        (silenceChunks >= SILENCE_CHUNKS_TO_COMMIT && (words.length > 0 || utteranceChunks > 14)) ||
+        (silenceChunks >= SILENCE_CHUNKS_TO_COMMIT && (words.length > 0 || utteranceChunks > 10)) ||
+        autoClauseCommit ||
         utteranceChunks >= MAX_UTTERANCE_CHUNKS;
 
       if (text.length > 0 || ghost.length > 0) {

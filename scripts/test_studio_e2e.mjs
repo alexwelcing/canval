@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import WebSocket from 'ws';
 import {
   buildStateComputerMessages,
+  compileCompoundSyscalls,
   compileVerifiedSyscall,
 } from '../src/canvas/stateComputer.ts';
 
@@ -160,13 +161,15 @@ try {
   assert.equal(blockedDel.syscall.op, 'PLACE');
   console.log('6. Destructive Safety Lock + Relative Move PASS:', blockedDel.opcodeLine);
 
-  // 7. Test WebSocket /ws/voice Earlybird-29M streaming readiness + binary PCM handling
+  // 7. Test WebSocket /ws/voice Zero-RTT readiness + sync_state + binary PCM handling
   await new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}/ws/voice`);
     const timer = setTimeout(() => reject(new Error('WS timeout')), 5000);
     ws.on('message', (data) => {
       const msg = JSON.parse(data.toString('utf8'));
       if (msg.type === 'ready') {
+        assert.equal(msg.zeroRttResolve, true, 'Expected zeroRttResolve: true on /ws/voice');
+        ws.send(JSON.stringify({ type: 'sync_state', shapes: populatedSnap.shapes }));
         // Send 3 chunks of 80ms PCM audio (1280 float32 samples each)
         const pcm = new Float32Array(1280);
         for (let i = 0; i < 1280; i++) pcm[i] = Math.sin(i * 0.1) * 0.03;
@@ -182,9 +185,184 @@ try {
     });
     ws.on('error', reject);
   });
-  console.log('7. WebSocket /ws/voice Earlybird-29M binary PCM stream PASS!');
+  console.log('7. WebSocket /ws/voice Zero-RTT + sync_state + Earlybird PCM stream PASS!');
 
-  console.log('\nALL 7 E2E STUDIO TESTS PASSED 100%!');
+  // 8. Test Multi-Clause Superscalar Compound Compilation (<2ms, zero Qwen stall)
+  const compoundText =
+    'draw a yellow circle called Sun, add a blue circle called Earth, connect Sun to Earth, and make Earth orbit around Sun';
+  const compRes = await fetch(`${BASE}/api/voice/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: compoundText,
+      words: compoundText.split(/\s+/).map((w) => [w, 0.99]),
+      shapes: [],
+    }),
+  });
+  const { resolution: compSem } = await compRes.json();
+  const tComp0 = performance.now();
+  const compPlan = compileCompoundSyscalls(null, emptySnap, compSem);
+  const compMs = Math.round((performance.now() - tComp0) * 100) / 100;
+  assert.equal(compPlan.needsQwenDisambiguation, false, 'Expected zero Qwen stall on unambiguous compound speech');
+  assert.equal(compPlan.syscalls.length, 4, `Expected 4 syscalls, got: ${JSON.stringify(compPlan.syscalls)}`);
+  assert.deepEqual(
+    compPlan.syscalls.map((s) => s.op),
+    ['SPAWN', 'SPAWN', 'CONNECT', 'ANIM'],
+  );
+  assert.equal(compPlan.syscalls[0].label, 'Sun');
+  assert.equal(compPlan.syscalls[1].label, 'Earth');
+  assert.equal(compPlan.syscalls[3].aroundLabelHint?.toLowerCase(), 'sun');
+  console.log(`8. Superscalar 4-clause compound compilation PASS in ${compMs}ms:`, compPlan.opcodeLine);
+
+  // 9. Test Multi-Hop Chain Pipeline ("connect Client to Gateway to Auth to Postgres")
+  const chainText = 'connect Client to Gateway to Auth to Postgres';
+  const chainRes = await fetch(`${BASE}/api/voice/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: chainText,
+      words: chainText.split(/\s+/).map((w) => [w, 0.99]),
+      shapes: [],
+    }),
+  });
+  const { resolution: chainSem } = await chainRes.json();
+  const chainPlan = compileCompoundSyscalls(null, emptySnap, chainSem);
+  assert.equal(chainPlan.syscall.op, 'CONNECT');
+  assert.deepEqual(chainPlan.syscall.chainLabels, ['Client', 'Gateway', 'Auth', 'Postgres']);
+  console.log('9. Multi-hop chain pipeline PASS:', chainPlan.opcodeLine);
+
+  // 10. Test Terse Rapid-Fire Shorthands & New Syscalls (ROTATE, ALIGN, FRAME_GROUP, STYLE_ARROWS, DUPLICATE xN)
+  const shorthandChecks = [
+    { text: 'red circle', snap: emptySnap, expectedOp: 'SPAWN' },
+    { text: 'three blue stars', snap: emptySnap, expectedOp: 'SPAWN' },
+    { text: 'rotate 45 degrees', snap: populatedSnap, expectedOp: 'ROTATE' },
+    { text: 'align top edges', snap: populatedSnap, expectedOp: 'ALIGN' },
+    { text: 'put a frame around everything called Backend', snap: populatedSnap, expectedOp: 'FRAME_GROUP' },
+    { text: 'curve the arrows', snap: populatedSnap, expectedOp: 'STYLE_ARROWS' },
+    { text: 'duplicate four times', snap: populatedSnap, expectedOp: 'DUPLICATE' },
+  ];
+  for (const chk of shorthandChecks) {
+    const r = await fetch(`${BASE}/api/voice/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: chk.text,
+        words: chk.text.split(/\s+/).map((w) => [w, 0.99]),
+        shapes: chk.snap.shapes,
+      }),
+    });
+    const { resolution } = await r.json();
+    const compiled = compileCompoundSyscalls(null, chk.snap, resolution);
+    assert.equal(
+      compiled.syscall.op,
+      chk.expectedOp,
+      `For "${chk.text}" expected ${chk.expectedOp}, got ${compiled.syscall.op} (${compiled.opcodeLine})`,
+    );
+    assert.equal(compiled.needsQwenDisambiguation, false);
+  }
+  console.log('10. Rapid-fire shorthands & new syscalls (ROTATE, ALIGN, FRAME_GROUP, STYLE_ARROWS, DUPLICATE) PASS');
+
+  // 11. Test Expanded Conceptual Blueprints (orbit_system, neural, venn, funnel, cycle, wireframe)
+  const bpChecks = [
+    { text: 'draw a solar system with planets orbiting the sun', expectedBp: 'orbit_system' },
+    { text: 'create a neural network diagram', expectedBp: 'neural' },
+    { text: 'make a venn diagram', expectedBp: 'venn' },
+    { text: 'draw a conversion funnel', expectedBp: 'funnel' },
+    { text: 'create a feedback loop cycle', expectedBp: 'cycle' },
+    { text: 'draw a mobile app wireframe', expectedBp: 'wireframe' },
+  ];
+  for (const bchk of bpChecks) {
+    const r = await fetch(`${BASE}/api/voice/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: bchk.text,
+        words: bchk.text.split(/\s+/).map((w) => [w, 0.99]),
+        shapes: [],
+      }),
+    });
+    const { resolution } = await r.json();
+    const compiled = compileCompoundSyscalls(null, emptySnap, resolution);
+    assert.equal(compiled.syscall.op, 'LAYOUT', `Expected LAYOUT for "${bchk.text}", got ${compiled.syscall.op}`);
+    assert.equal(
+      compiled.syscall.kind,
+      bchk.expectedBp,
+      `Expected blueprint ${bchk.expectedBp} for "${bchk.text}", got ${compiled.syscall.kind}`,
+    );
+  }
+  console.log('11. Expanded conceptual blueprints (orbit_system, neural, venn, funnel, cycle, wireframe) PASS');
+
+  // 12. Test Open-Vocabulary Topic Ideation (/api/voice/ideate via Qwen2.5-0.5B + instant cache)
+  const idRes1 = await fetch(`${BASE}/api/voice/ideate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic: 'Quantum Computing', blueprintId: 'mindmap', count: 4 }),
+  });
+  assert.equal(idRes1.status, 200);
+  const idJson1 = await idRes1.json();
+  assert.ok(idJson1.ok && Array.isArray(idJson1.labels) && idJson1.labels.length >= 2);
+
+  const idRes2 = await fetch(`${BASE}/api/voice/ideate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic: 'Quantum Computing', blueprintId: 'mindmap', count: 4 }),
+  });
+  const idJson2 = await idRes2.json();
+  assert.equal(idJson2.cached, true);
+  console.log('12. Open-vocabulary Topic Ideation PASS:', idJson1.labels, `(${idJson1.latencyMs}ms cold, ${idJson2.latencyMs}ms cached)`);
+
+  // 13. Rapid-Fire 20-Command Throughput Benchmark (Cold + LRU Warm)
+  const rapidCommands = [
+    'red circle',
+    'blue hexagon called Gateway',
+    'green trapezoid called Postgres',
+    'connect Gateway to Postgres',
+    'move left',
+    'bigger',
+    'make it float',
+    'faster',
+    'yellow star',
+    'violet diamond called Auth',
+    'red circle',
+    'move left',
+    'bigger',
+    'faster',
+    'yellow star',
+    'draw three circles in a row',
+    'curve the arrows',
+    'rotate 45 degrees',
+    'align center horizontally',
+    'stop animating',
+  ];
+  const resolveTimes = [];
+  const stateTimes = [];
+  for (const cmd of rapidCommands) {
+    const r = await fetch(`${BASE}/api/voice/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: cmd,
+        words: cmd.split(/\s+/).map((w) => [w, 0.99]),
+        shapes: populatedSnap.shapes,
+      }),
+    });
+    const { resolution } = await r.json();
+    resolveTimes.push(resolution.elapsedMs);
+    const ts0 = performance.now();
+    compileCompoundSyscalls(null, populatedSnap, resolution);
+    stateTimes.push(performance.now() - ts0);
+  }
+  const avgResolveMs = Math.round((resolveTimes.reduce((a, b) => a + b, 0) / resolveTimes.length) * 100) / 100;
+  const cachedSlice = resolveTimes.slice(10, 15);
+  const avgCachedMs = Math.round((cachedSlice.reduce((a, b) => a + b, 0) / cachedSlice.length) * 100) / 100;
+  const avgStateMs = Math.round((stateTimes.reduce((a, b) => a + b, 0) / stateTimes.length) * 1000) / 1000;
+  assert.ok(avgCachedMs < 2, `Expected LRU cached resolve < 2ms, got ${avgCachedMs}ms`);
+  assert.ok(avgStateMs < 1.5, `Expected Superscalar state compile < 1.5ms, got ${avgStateMs}ms`);
+  console.log(
+    `13. Rapid-Fire 20-Command Benchmark PASS: avgGemmaMs=${avgResolveMs}ms, lruWarmMs=${avgCachedMs}ms, avgStateCompilerMs=${avgStateMs}ms`,
+  );
+
+  console.log('\nALL 13 E2E STUDIO + SPEED + CREATIVE BREADTH TESTS PASSED 100%!');
 } finally {
   serverProc.kill();
 }

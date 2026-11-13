@@ -28,7 +28,7 @@ export class SharedEarlybirdWeights {
     this.meta = JSON.parse(metaRaw);
 
     const opts = {
-      intraOpNumThreads: 2,
+      intraOpNumThreads: 4,
       interOpNumThreads: 1,
       graphOptimizationLevel: 'all',
     };
@@ -73,9 +73,9 @@ export class EarlybirdLiveSession {
     this.meta = shared.meta;
     this.onUpdate = onUpdate;
 
-    this.nGuess = 2;
+    this.nGuess = 1;
     this.tokPerS = 6.5;
-    this.minS = 0.24;
+    this.minS = 0.16;
 
     this.utteranceId = 1;
     this.pcmQueue = new Float32Array(0);
@@ -89,7 +89,7 @@ export class EarlybirdLiveSession {
 
     this.SPEECH_RMS_ONSET = 0.014;
     this.SPEECH_RMS_HOLD = 0.009;
-    this.SILENCE_CHUNKS_TO_COMMIT = 8; // 640ms pause commits utterance
+    this.SILENCE_CHUNKS_TO_COMMIT = 4; // 320ms crisp pause commits utterance for rapid-fire voice
     this.MAX_UTTERANCE_CHUNKS = 180;
 
     this.resetStreamState();
@@ -628,9 +628,15 @@ export class EarlybirdLiveSession {
         const ghost = this.getWords(this.guessToks, this.guessProbs);
         const text = this.decodePieces(this.hyp);
 
+        const autoClauseCommit =
+          this.utteranceChunks >= 38 &&
+          this.silenceChunks >= 2 &&
+          words.length >= 3;
+
         const shouldCommit =
           (this.silenceChunks >= this.SILENCE_CHUNKS_TO_COMMIT &&
-            (words.length > 0 || this.utteranceChunks > 14)) ||
+            (words.length > 0 || this.utteranceChunks > 10)) ||
+          autoClauseCommit ||
           this.utteranceChunks >= this.MAX_UTTERANCE_CHUNKS;
 
         if (text.length > 0 || ghost.length > 0) {

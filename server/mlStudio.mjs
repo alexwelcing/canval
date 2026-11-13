@@ -67,6 +67,8 @@ export class StudioMLKernel {
     this.bank768 = new Float32Array(0);
     this.bank256 = new Float32Array(0);
     this.shapeCache = new Map();
+    this.queryEmbedCache = new Map();
+    this.ideateCache = new Map();
 
     // Lightweight async mutex for Qwen greedy generation
     this.qwenChain = Promise.resolve();
@@ -153,6 +155,13 @@ export class StudioMLKernel {
   }
 
   async embedRaw(formattedText) {
+    const cached = this.queryEmbedCache.get(formattedText);
+    if (cached) {
+      this.queryEmbedCache.delete(formattedText);
+      this.queryEmbedCache.set(formattedText, cached);
+      return cached;
+    }
+
     const inputs = await this.gemmaTokenizer(formattedText, { padding: true, truncation: true });
     const out = await this.gemmaModel(inputs);
     const raw = Float32Array.from(out.sentence_embedding.data);
@@ -166,7 +175,13 @@ export class StudioMLKernel {
     }
     const vec768 = l2Normalize(raw, DIM_FULL);
     const vec256 = l2Normalize(vec768, DIM_MRL);
-    return { vec768, vec256 };
+    const entry = { vec768, vec256 };
+    if (this.queryEmbedCache.size >= 512) {
+      const oldest = this.queryEmbedCache.keys().next().value;
+      if (oldest !== undefined) this.queryEmbedCache.delete(oldest);
+    }
+    this.queryEmbedCache.set(formattedText, entry);
+    return entry;
   }
 
   scoreGroup(qVec, useMrl, group) {
@@ -192,16 +207,25 @@ export class StudioMLKernel {
   }
 
   async ensureShapeEmbeddings(shapes = []) {
+    const missing = [];
+    const seen = new Set();
     for (const s of shapes) {
       const key = `${s.color || 'black'}:${s.shapeType || 'rectangle'}:${String(s.label || '').trim().toLowerCase()}`;
-      if (!this.shapeCache.has(key)) {
-        if (this.shapeCache.size > 512) this.shapeCache.clear();
+      if (!this.shapeCache.has(key) && !seen.has(key)) {
+        seen.add(key);
+        missing.push({ key, s });
+      }
+    }
+    if (missing.length === 0) return;
+    if (this.shapeCache.size + missing.length > 512) this.shapeCache.clear();
+    await Promise.all(
+      missing.map(async ({ key, s }) => {
         const lbl = String(s.label || '').trim();
         const desc = `${s.color || 'black'} ${s.shapeType || 'rectangle'} ${lbl}`.trim();
         const vecs = await this.embedRaw(`title: ${lbl || s.shapeType || 'shape'} | text: ${desc}`);
         this.shapeCache.set(key, vecs);
-      }
-    }
+      }),
+    );
   }
 
   rankShapes(qVec, useMrl, shapes = []) {
@@ -373,7 +397,7 @@ export class StudioMLKernel {
       const inputs = await this.qwenTokenizer(prompt);
       const out = await this.qwenModel.generate({
         ...inputs,
-        max_new_tokens: 12,
+        max_new_tokens: 8,
         do_sample: false,
       });
       const genIds = out.slice(null, [inputs.input_ids.dims[1], null]);
@@ -390,6 +414,85 @@ export class StudioMLKernel {
         ok: true,
         opcode,
         model: 'onnx-community/Qwen2.5-0.5B-Instruct-ONNX (q4)',
+        latencyMs: Math.round((performance.now() - t0) * 10) / 10,
+      };
+    };
+
+    const next = this.qwenChain.then(run, run);
+    this.qwenChain = next.catch(() => {});
+    return next;
+  }
+
+  async ideateTopicNodes({ topic = '', blueprintId = 'mindmap', count = 4 }) {
+    const cleanTopic = String(topic || '').trim().slice(0, 64);
+    const clampedCount = Math.min(7, Math.max(2, Number(count) || 4));
+    if (!cleanTopic) {
+      return { ok: false, topic: '', labels: [], latencyMs: 0 };
+    }
+
+    const cacheKey = `${cleanTopic.toLowerCase()}:${blueprintId}:${clampedCount}`;
+    const cached = this.ideateCache.get(cacheKey);
+    if (cached) {
+      return { ok: true, topic: cleanTopic, labels: cached, cached: true, latencyMs: 0.1 };
+    }
+
+    if (!this.qwenReady || !this.qwenModel || !this.qwenTokenizer) {
+      return { ok: false, topic: cleanTopic, labels: [], latencyMs: 0 };
+    }
+
+    const run = async () => {
+      const t0 = performance.now();
+      const messages = [
+        {
+          role: 'system',
+          content:
+            'Output a comma-separated list of concise 1-to-3 word diagram node labels. Output ONLY the comma-separated labels with no numbering or quotes.',
+        },
+        {
+          role: 'user',
+          content: `Topic: ${cleanTopic}\nDiagram: ${blueprintId}\nCount: ${clampedCount}\nLabels:`,
+        },
+      ];
+      const prompt = this.qwenTokenizer.apply_chat_template(messages, {
+        tokenize: false,
+        add_generation_prompt: true,
+      });
+      const inputs = await this.qwenTokenizer(prompt);
+      const out = await this.qwenModel.generate({
+        ...inputs,
+        max_new_tokens: 28,
+        do_sample: false,
+      });
+      const genIds = out.slice(null, [inputs.input_ids.dims[1], null]);
+      const decoded = this.qwenTokenizer.batch_decode(genIds, { skip_special_tokens: true })[0] ?? '';
+      try {
+        inputs.input_ids?.dispose?.();
+        inputs.attention_mask?.dispose?.();
+        out?.dispose?.();
+      } catch {
+        // ignore disposal
+      }
+
+      const labels = decoded
+        .split(/,|\n|;|\|/)
+        .map((s) =>
+          s
+            .replace(/^[\d.)\-*•\s"'`]+/, '')
+            .replace(/["'`.:]+$/, '')
+            .trim(),
+        )
+        .filter((s) => s.length >= 2 && s.length <= 28 && !/^labels?$/i.test(s))
+        .slice(0, clampedCount);
+
+      if (labels.length >= 2) {
+        if (this.ideateCache.size >= 256) this.ideateCache.clear();
+        this.ideateCache.set(cacheKey, labels);
+      }
+
+      return {
+        ok: labels.length >= 2,
+        topic: cleanTopic,
+        labels,
         latencyMs: Math.round((performance.now() - t0) * 10) / 10,
       };
     };

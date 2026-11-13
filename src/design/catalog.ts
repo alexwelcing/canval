@@ -417,12 +417,17 @@ export type IntentKind =
   | 'connect_shapes'
   | 'style_color'
   | 'style_stroke_fill'
+  | 'style_arrows'
   | 'transform_move'
   | 'transform_move_relative'
   | 'transform_swap'
   | 'transform_scale'
+  | 'transform_rotate'
   | 'transform_arrange'
+  | 'transform_align_distribute'
   | 'transform_duplicate'
+  | 'frame_group'
+  | 'z_order'
   | 'animate_shapes'
   | 'stop_animation'
   | 'lock_shapes'
@@ -451,9 +456,9 @@ export const INTENT_PROTOTYPES: IntentPrototype[] = [
   {
     id: 'intent-create-single',
     kind: 'create_shape',
-    title: 'Create or draw shapes, boxes, circles, notes, or text on canvas',
+    title: 'Create, draw, add, or spawn new shapes, boxes, circles, stars, notes, or text on canvas',
     exemplars:
-      'draw a box, add a rectangle, create three circles, put a sticky note here, place a diamond decision node, add a headline text, draw a star, create a card called authentication, drop two clouds',
+      'draw a box, draw three circles in a row, add a rectangle, create four stars, put a sticky note here, place a diamond decision node, add a headline text, create a card called authentication, drop two clouds, spawn five hexagons',
     speculativeSafe: true,
   },
   {
@@ -646,6 +651,46 @@ export const INTENT_PROTOTYPES: IntentPrototype[] = [
       'harmonize the canvas, harmonize the design, critique the composition, curate the visual hierarchy, auto style this diagram, polish and balance the layout',
     speculativeSafe: false,
   },
+  {
+    id: 'intent-frame-group',
+    kind: 'frame_group',
+    title: 'Frame, group, wrap, or enclose existing shapes inside a labeled section artboard frame',
+    exemplars:
+      'put a frame around everything, group those shapes in a frame called Backend, wrap all cards inside a section box, frame this cluster as Sprint One, enclose them in an artboard',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-rotate',
+    kind: 'transform_rotate',
+    title: 'Rotate, tilt, angle, turn 45 or 90 degrees, or straighten shapes',
+    exemplars:
+      'rotate 45 degrees, turn it 90 degrees, tilt that card slightly, flip upside down, reset rotation straight',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-align-distribute',
+    kind: 'transform_align_distribute',
+    title: 'Align existing edges to top, bottom, left, right, middle, or distribute spacing evenly',
+    exemplars:
+      'align left edges, align top edges, align bottom, center vertically, center horizontally, distribute horizontally with equal spacing, distribute vertically evenly',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-style-arrows',
+    kind: 'style_arrows',
+    title: 'Style arrows and connectors: curved arc arrows, orthogonal elbow lines, dashed connectors, or reverse direction',
+    exemplars:
+      'curve the arrows, make connectors curved arcs, use straight elbow arrows, make all arrows dashed, reverse the arrow direction',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-z-order',
+    kind: 'z_order',
+    title: 'Change layer order: bring shapes to front or send shapes to back',
+    exemplars:
+      'bring that to the front, send frame to the back, put behind everything, layer on top',
+    speculativeSafe: false,
+  },
 ];
 
 export type BlueprintKind =
@@ -656,6 +701,16 @@ export type BlueprintKind =
   | 'quadrant'
   | 'timeline'
   | 'bento'
+  | 'cycle'
+  | 'tree'
+  | 'venn'
+  | 'funnel'
+  | 'neural'
+  | 'orbit_system'
+  | 'wireframe'
+  | 'state_machine'
+  | 'layers'
+  | 'comparison'
   | 'row'
   | 'column';
 
@@ -671,7 +726,7 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
     id: 'architecture',
     title: 'System architecture pipeline with client, gateway, service, and database tiers',
     exemplars:
-      'system architecture diagram, backend microservice pipeline, client api server database stack, cloud infrastructure topology, three tier web app architecture',
+      'system architecture diagram, backend microservice pipeline, client api server database stack, cloud infrastructure topology, three tier web app architecture, rag pipeline',
     defaultNodes: [
       { label: 'Mobile Client', geo: 'oval', role: 'secondary' },
       { label: 'API Gateway', geo: 'hexagon', role: 'primary' },
@@ -683,7 +738,7 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
     id: 'flowchart',
     title: 'Sequential process flowchart with steps and decision diamond',
     exemplars:
-      'process flowchart, user onboarding journey steps, login workflow diagram, decision tree funnel, step by step sequence with arrows',
+      'process flowchart, user onboarding journey steps, login workflow diagram, decision tree algorithm, step by step sequence with arrows',
     defaultNodes: [
       { label: 'Voice Input', geo: 'oval', role: 'secondary' },
       { label: 'Parse Intent', geo: 'rectangle', role: 'primary' },
@@ -695,7 +750,7 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
     id: 'mindmap',
     title: 'Radial brainstorm mindmap with central thesis and surrounding concept branches',
     exemplars:
-      'mindmap brainstorm, radial concept map, central idea with branches, hub and spoke diagram, topic cluster web',
+      'mindmap brainstorm, radial concept map, central idea with branches, hub and spoke diagram, topic cluster web, explore ideas around',
     defaultNodes: [
       { label: 'Core Thesis', geo: 'ellipse', role: 'accent' },
       { label: 'Form', geo: 'rectangle', role: 'primary' },
@@ -708,7 +763,7 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
     id: 'kanban',
     title: 'Three-column Kanban board with backlog, active, and complete cards',
     exemplars:
-      'kanban board, three columns todo doing done, sprint task board, project columns workflow, sticky note board',
+      'kanban board, three columns todo doing done, sprint task board, project columns workflow, sticky note agile board',
     defaultNodes: [
       { label: 'QUEUED', geo: 'rectangle', role: 'muted' },
       { label: 'IN FLIGHT', geo: 'rectangle', role: 'accent' },
@@ -719,19 +774,19 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
     id: 'quadrant',
     title: 'Two-by-two 2x2 matrix quadrant grid for strategic comparison',
     exemplars:
-      'two by two matrix, 2x2 quadrant chart, impact effort matrix, pros and cons four box comparison grid, swot analysis',
+      'two by two matrix, 2x2 quadrant chart, impact effort matrix, eisenhower urgent important matrix, swot analysis strengths weaknesses opportunities threats',
     defaultNodes: [
-      { label: 'High Craft · Fast', geo: 'rectangle', role: 'accent' },
-      { label: 'High Craft · Deep', geo: 'rectangle', role: 'primary' },
-      { label: 'Quick Sketch', geo: 'rectangle', role: 'secondary' },
-      { label: 'Archive', geo: 'rectangle', role: 'muted' },
+      { label: 'High Impact · Fast', geo: 'rectangle', role: 'accent' },
+      { label: 'Strategic Bets', geo: 'rectangle', role: 'primary' },
+      { label: 'Quick Wins', geo: 'rectangle', role: 'secondary' },
+      { label: 'Backlog', geo: 'rectangle', role: 'muted' },
     ],
   },
   {
     id: 'timeline',
     title: 'Horizontal milestone timeline or chronological roadmap',
     exemplars:
-      'project timeline, four milestone roadmap, chronological phases, launch schedule horizon, release phases',
+      'project timeline, four milestone roadmap, chronological phases, launch schedule horizon, history era sequence, release phases',
     defaultNodes: [
       { label: 'I · Concept', geo: 'oval', role: 'secondary' },
       { label: 'II · Prototype', geo: 'oval', role: 'primary' },
@@ -741,14 +796,141 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
   },
   {
     id: 'bento',
-    title: 'Modular bento dashboard grid or mobile app UI wireframe',
+    title: 'Modular bento dashboard grid or feature showcase cards',
     exemplars:
-      'bento box grid, dashboard layout wireframe, mobile screen layout cards, hero header and feature cards',
+      'bento box grid, dashboard metrics layout, feature showcase cards, modular summary grid',
     defaultNodes: [
       { label: 'Hero Canvas', geo: 'rectangle', role: 'primary' },
       { label: 'Voice Stream', geo: 'rectangle', role: 'accent' },
       { label: 'Style Vectors', geo: 'rectangle', role: 'secondary' },
       { label: 'Edition Plate', geo: 'rectangle', role: 'muted' },
+    ],
+  },
+  {
+    id: 'cycle',
+    title: 'Circular feedback loop, flywheel, lifecycle, or continuous iteration ring',
+    exemplars:
+      'feedback loop cycle, growth flywheel, continuous iteration loop, water cycle, build measure learn loop, circular lifecycle diagram, closed ring process',
+    defaultNodes: [
+      { label: 'Observe', geo: 'oval', role: 'secondary' },
+      { label: 'Orient', geo: 'oval', role: 'primary' },
+      { label: 'Decide', geo: 'oval', role: 'accent' },
+      { label: 'Act', geo: 'oval', role: 'primary' },
+    ],
+  },
+  {
+    id: 'tree',
+    title: 'Hierarchical tree diagram, org chart, taxonomy, or parent-child breakdown',
+    exemplars:
+      'org chart hierarchy, tree diagram, parent child taxonomy, work breakdown structure, file directory tree, family tree, company organization chart',
+    defaultNodes: [
+      { label: 'Principal Root', geo: 'rectangle', role: 'accent' },
+      { label: 'Systems', geo: 'rectangle', role: 'primary' },
+      { label: 'Design', geo: 'rectangle', role: 'secondary' },
+      { label: 'Models', geo: 'rectangle', role: 'primary' },
+      { label: 'Runtime', geo: 'oval', role: 'muted' },
+      { label: 'Typography', geo: 'oval', role: 'muted' },
+      { label: 'Inference', geo: 'oval', role: 'muted' },
+    ],
+  },
+  {
+    id: 'venn',
+    title: 'Overlapping Venn diagram circles showing shared intersection of concepts',
+    exemplars:
+      'venn diagram, overlapping circles intersection, three circle overlap comparison, sweet spot intersection diagram, ikigai overlap',
+    defaultNodes: [
+      { label: 'Voice', geo: 'ellipse', role: 'primary' },
+      { label: 'Design', geo: 'ellipse', role: 'secondary' },
+      { label: 'Motion', geo: 'ellipse', role: 'accent' },
+    ],
+  },
+  {
+    id: 'funnel',
+    title: 'Progressive top-down conversion funnel or filtering stages',
+    exemplars:
+      'conversion funnel, sales marketing funnel, user acquisition funnel, filtering pipeline stages, top of funnel to bottom',
+    defaultNodes: [
+      { label: 'Discovery', geo: 'trapezoid', role: 'secondary' },
+      { label: 'Activation', geo: 'trapezoid', role: 'primary' },
+      { label: 'Retention', geo: 'trapezoid', role: 'primary' },
+      { label: 'Advocacy', geo: 'trapezoid', role: 'accent' },
+    ],
+  },
+  {
+    id: 'neural',
+    title: 'Neural network architecture, deep learning layers, or transformer graph',
+    exemplars:
+      'neural network diagram, deep learning layers input hidden output, multi layer perceptron graph, machine learning model graph, transformer attention network',
+    defaultNodes: [
+      { label: 'Audio PCM', geo: 'ellipse', role: 'secondary' },
+      { label: 'Tokens', geo: 'ellipse', role: 'secondary' },
+      { label: 'Encoder', geo: 'hexagon', role: 'primary' },
+      { label: 'Embeddings', geo: 'hexagon', role: 'accent' },
+      { label: 'State Kernel', geo: 'hexagon', role: 'primary' },
+      { label: 'Canvas Scene', geo: 'oval', role: 'accent' },
+    ],
+  },
+  {
+    id: 'orbit_system',
+    title: 'Solar system, atomic orbitals, or ecosystem core with orbiting satellites',
+    exemplars:
+      'solar system planets orbiting sun, atomic nucleus with electrons, planetary orbit diagram, central sun with satellites revolving, ecosystem gravity model',
+    defaultNodes: [
+      { label: 'Sun', geo: 'ellipse', role: 'accent' },
+      { label: 'Mercury', geo: 'ellipse', role: 'muted' },
+      { label: 'Venus', geo: 'ellipse', role: 'secondary' },
+      { label: 'Earth', geo: 'ellipse', role: 'primary' },
+      { label: 'Mars', geo: 'ellipse', role: 'accent' },
+    ],
+  },
+  {
+    id: 'wireframe',
+    title: 'Mobile or web app UI screen wireframe with navigation, hero, inputs, and CTA button',
+    exemplars:
+      'mobile app wireframe, login screen mockup, landing page ui wireframe, phone interface sketch, product screen layout',
+    defaultNodes: [
+      { label: 'Navigation Bar', geo: 'rectangle', role: 'muted' },
+      { label: 'Hero Showcase', geo: 'rectangle', role: 'primary' },
+      { label: 'Primary Input', geo: 'oval', role: 'secondary' },
+      { label: 'Continue', geo: 'oval', role: 'accent' },
+    ],
+  },
+  {
+    id: 'state_machine',
+    title: 'Finite state machine diagram with states and transition arrows',
+    exemplars:
+      'state machine diagram, finite automata states, idle loading active error transitions, connection lifecycle state graph',
+    defaultNodes: [
+      { label: 'Idle', geo: 'oval', role: 'muted' },
+      { label: 'Arming', geo: 'hexagon', role: 'secondary' },
+      { label: 'Live Stream', geo: 'oval', role: 'accent' },
+      { label: 'Commit', geo: 'rectangle', role: 'primary' },
+    ],
+  },
+  {
+    id: 'layers',
+    title: 'Horizontal stacked architecture layers or tech stack Cake diagram',
+    exemplars:
+      'layered stack diagram, horizontal platform tiers, osi model layers, frontend api data infrastructure stack, tech stack layers',
+    defaultNodes: [
+      { label: 'Presentation & Canvas Surface', geo: 'rectangle', role: 'accent' },
+      { label: 'Semantic Intent & Design Bank', geo: 'rectangle', role: 'primary' },
+      { label: 'Symbolic Register State Kernel', geo: 'rectangle', role: 'secondary' },
+      { label: 'Streaming ONNX Runtime', geo: 'rectangle', role: 'muted' },
+    ],
+  },
+  {
+    id: 'comparison',
+    title: 'Side-by-side comparison table, pros and cons, or before vs after columns',
+    exemplars:
+      'pros and cons comparison, side by side versus table, option a vs option b, before and after comparison, tradeoffs chart',
+    defaultNodes: [
+      { label: 'Traditional UI', geo: 'rectangle', role: 'muted' },
+      { label: 'Spoken Studio', geo: 'rectangle', role: 'accent' },
+      { label: 'Nested Menus & Toolbars', geo: 'rectangle', role: 'muted' },
+      { label: 'Zero Buttons · Direct Voice', geo: 'rectangle', role: 'primary' },
+      { label: 'Manual Pixel Alignment', geo: 'rectangle', role: 'muted' },
+      { label: 'Instant Curatorial Harmony', geo: 'rectangle', role: 'secondary' },
     ],
   },
   {
@@ -764,6 +946,32 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
     defaultNodes: [],
   },
 ];
+
+export const TOPIC_CONCEPT_LEXICON: Record<string, string[]> = {
+  solar: ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars'],
+  planet: ['Sun', 'Mercury', 'Venus', 'Earth', 'Mars'],
+  atom: ['Nucleus', 'Inner Shell', 'Valence Electron', 'Photon'],
+  space: ['Space Exploration', 'Orbital Launch', 'Lunar Gateway', 'Mars Habitat', 'Deep Space'],
+  climate: ['Climate Tech', 'Solar Array', 'Grid Storage', 'Direct Capture', 'Clean Hydrogen'],
+  photosynthesis: ['Sunlight', 'Chloroplast', 'Water & CO2', 'Glucose & Oxygen'],
+  water: ['Evaporation', 'Condensation', 'Precipitation', 'Collection'],
+  coffee: ['Whole Beans', 'Precision Grind', '9-Bar Extraction', 'Microfoam Latte'],
+  checkout: ['Cart Review', 'Shipping Address', 'Payment Auth', 'Order Confirmed'],
+  ecommerce: ['Storefront', 'Cart & Checkout', 'Stripe Payment', 'Fulfillment'],
+  auth: ['User Credentials', 'OAuth Verify', 'Issue JWT', 'Protected Session'],
+  login: ['Login Screen', 'Validate Token', '2FA Check', 'Dashboard'],
+  rag: ['User Query', 'Vector Embed', 'Top-K Retrieval', 'Grounded Synthesis'],
+  kubernetes: ['Ingress Load Balancer', 'Control Plane', 'Worker Pods', 'Persistent Volume'],
+  startup: ['Core Problem', 'MVP Product', 'Design Partners', 'Growth Flywheel', 'Scale'],
+  marketing: ['Awareness', 'Consideration', 'Trial Signup', 'Paid Conversion'],
+  compiler: ['Source Code', 'Lexer & AST', 'IR Optimizer', 'Machine Code'],
+  git: ['Working Tree', 'Stage Changes', 'Feature Commit', 'Pull Request', 'Production'],
+  music: ['Harmony', 'Rhythm', 'Melody', 'Timbre', 'Arrangement'],
+  game: ['Player Input', 'Physics Step', 'World State', '60fps Render'],
+  science: ['Hypothesis', 'Experiment', 'Observation', 'Analysis', 'Conclusion'],
+  biology: ['Cell Nucleus', 'Mitochondria', 'Ribosome', 'Cell Membrane', 'ATP Energy'],
+  morning: ['Wake Early', 'Hydrate', 'Deep Focus', 'Movement'],
+};
 
 export interface ShapeArchetype {
   id: string;
@@ -794,8 +1002,8 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     w: 140,
     h: 140,
     role: 'secondary',
-    title: 'Circle, orb, sphere, dot, hub, or round node',
-    exemplars: 'circle, round orb, sphere, bubble, point, hub, node, loop',
+    title: 'Circle, orb, sphere, dot, hub, planet, or round node',
+    exemplars: 'circle, round orb, sphere, bubble, point, hub, node, planet, sun, moon',
   },
   {
     id: 'arch-pill',
@@ -805,7 +1013,7 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     h: 82,
     role: 'secondary',
     title: 'Pill, badge, terminal start/end capsule, button, or tag',
-    exemplars: 'pill, capsule, oval, rounded badge, start node, endpoint, user actor, client',
+    exemplars: 'pill, capsule, oval, rounded badge, button, start node, endpoint, user actor, client',
   },
   {
     id: 'arch-diamond',
@@ -815,7 +1023,7 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     h: 150,
     role: 'accent',
     title: 'Diamond, decision gate, router, branch, or condition',
-    exemplars: 'diamond, rhombus, decision node, condition check, gateway branch, router',
+    exemplars: 'diamond, decision node, condition check, gateway branch, router, if else',
   },
   {
     id: 'arch-hexagon',
@@ -825,7 +1033,7 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     h: 140,
     role: 'primary',
     title: 'Hexagon, engine, processor, microservice, or worker',
-    exemplars: 'hexagon, polygon, processor, worker, model engine, transformer, api gateway',
+    exemplars: 'hexagon, polygon, processor, worker, model engine, transformer, api gateway, microservice',
   },
   {
     id: 'arch-database',
@@ -834,7 +1042,7 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     w: 185,
     h: 115,
     role: 'muted',
-    title: 'Database, storage bucket, warehouse, queue, or index',
+    title: 'Database, storage bucket, warehouse, funnel stage, or index',
     exemplars: 'database, storage, sql postgres, vector store, bucket, cache, memory bank, trapezoid',
   },
   {
@@ -844,8 +1052,8 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     w: 210,
     h: 130,
     role: 'secondary',
-    title: 'Cloud, internet, external network, or atmosphere',
-    exemplars: 'cloud, network, internet, external service, thought cloud, sky',
+    title: 'Cloud, internet, external network, or thought cloud',
+    exemplars: 'cloud, network, internet, external service, thought bubble, sky, cdn',
   },
   {
     id: 'arch-triangle',
@@ -854,7 +1062,7 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     w: 150,
     h: 140,
     role: 'accent',
-    title: 'Triangle, pyramid, delta, warning, or peak',
+    title: 'Triangle, pyramid, delta, warning, or hierarchy peak',
     exemplars: 'triangle, pyramid, warning alert, delta, hierarchy peak, wedge',
   },
   {
@@ -864,8 +1072,8 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     w: 145,
     h: 145,
     role: 'accent',
-    title: 'Star, spark, highlight, north star, or favorite',
-    exemplars: 'star, sparkle, milestone badge, north star, highlight emblem',
+    title: 'Star, spark, highlight, north star, or milestone emblem',
+    exemplars: 'star, sparkle, milestone badge, north star, highlight emblem, award',
   },
   {
     id: 'arch-heart',
@@ -874,8 +1082,78 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     w: 135,
     h: 130,
     role: 'accent',
-    title: 'Heart, love, health, or empathy symbol',
-    exemplars: 'heart, love, favorite, care, pulse',
+    title: 'Heart, love, health, empathy, or favorite symbol',
+    exemplars: 'heart, love, favorite, care, health, pulse',
+  },
+  {
+    id: 'arch-octagon',
+    shapeType: 'geo',
+    geo: 'octagon',
+    w: 155,
+    h: 155,
+    role: 'accent',
+    title: 'Octagon, stop gate, security firewall, checkpoint, or pod',
+    exemplars: 'octagon, eight sided stop sign, firewall security gate, guardrail, checkpoint',
+  },
+  {
+    id: 'arch-pentagon',
+    shapeType: 'geo',
+    geo: 'pentagon',
+    w: 155,
+    h: 150,
+    role: 'secondary',
+    title: 'Pentagon, shield, crest, emblem, or five-sided node',
+    exemplars: 'pentagon, five sided shield, badge crest, house shape, cluster',
+  },
+  {
+    id: 'arch-rhombus',
+    shapeType: 'geo',
+    geo: 'rhombus',
+    w: 195,
+    h: 105,
+    role: 'secondary',
+    title: 'Parallelogram, rhombus, data input output stream, queue, or slanted card',
+    exemplars: 'parallelogram, slanted box, data input output, io stream, message queue, buffer',
+  },
+  {
+    id: 'arch-chevron',
+    shapeType: 'geo',
+    geo: 'arrow-right',
+    w: 205,
+    h: 95,
+    role: 'accent',
+    title: 'Right block arrow, phase chevron, callout banner, or forward pointer',
+    exemplars: 'block arrow right, chevron banner, forward stage arrow, callout pointer',
+  },
+  {
+    id: 'arch-chevron-left',
+    shapeType: 'geo',
+    geo: 'arrow-left',
+    w: 205,
+    h: 95,
+    role: 'secondary',
+    title: 'Left block arrow, return chevron, or backward pointer',
+    exemplars: 'block arrow left, left chevron, return arrow shape, backward pointer',
+  },
+  {
+    id: 'arch-checkbox',
+    shapeType: 'geo',
+    geo: 'check-box',
+    w: 190,
+    h: 90,
+    role: 'secondary',
+    title: 'Checkbox, completed task, checklist item, or verified requirement',
+    exemplars: 'checkbox, check box, todo task item, verified check, done card, requirement',
+  },
+  {
+    id: 'arch-xbox',
+    shapeType: 'geo',
+    geo: 'x-box',
+    w: 190,
+    h: 90,
+    role: 'accent',
+    title: 'Crossed X-box, blocker, anti-pattern, risk, or rejected option',
+    exemplars: 'x box, crossed box, blocker card, anti pattern, rejected item, error state',
   },
   {
     id: 'arch-sticky',
@@ -892,8 +1170,8 @@ export const SHAPE_ARCHETYPES: ShapeArchetype[] = [
     w: 260,
     h: 60,
     role: 'primary',
-    title: 'Typography, title, heading, quote, caption, or text label',
-    exemplars: 'heading, title text, standalone quote, typography, caption, write words',
+    title: 'Typography, title, heading, quote, caption, or standalone text',
+    exemplars: 'heading, title text, standalone quote, typography, caption, write words, banner text',
   },
   {
     id: 'arch-frame',

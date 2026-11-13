@@ -87,6 +87,7 @@ export function App() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const cloudReadyRef = useRef(false);
+  const zeroRttWsRef = useRef(false);
   const localGemmaReadyRef = useRef(false);
 
   const ebWorkerRef = useRef<Worker | null>(null);
@@ -134,12 +135,42 @@ export function App() {
 
   const syncShapesToGemma = useCallback(() => {
     const editor = editorRef.current;
-    const gw = gemmaWorkerRef.current;
-    if (!editor || !gw || !localGemmaReadyRef.current) return;
+    if (!editor) return;
     const shapes = collectCanvasShapeSummaries(editor);
-    const msg: GemmaWorkerIn = { type: 'sync_shapes', shapes };
-    gw.postMessage(msg);
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN && cloudReadyRef.current) {
+      ws.send(JSON.stringify({ type: 'sync_state', shapes }));
+    }
+    const gw = gemmaWorkerRef.current;
+    if (gw && localGemmaReadyRef.current) {
+      const msg: GemmaWorkerIn = { type: 'sync_shapes', shapes };
+      gw.postMessage(msg);
+    }
   }, []);
+
+  const enrichTopicBlueprint = useCallback(
+    (target: NonNullable<DirectorResult['ideateTarget']>) => {
+      if (!target.topic || target.nodeIds.length === 0) return;
+      void fetch('/api/voice/ideate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          topic: target.topic,
+          blueprintId: target.blueprintKind,
+          count: target.nodeIds.length,
+        }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { ok?: boolean; labels?: string[] } | null) => {
+          const editor = editorRef.current;
+          if (!editor || !data?.ok || !Array.isArray(data.labels) || data.labels.length < 2) return;
+          directorRef.current.applyTopicEnrichment(editor, target.nodeIds, data.labels);
+          syncShapesToGemma();
+        })
+        .catch(() => {});
+    },
+    [syncShapesToGemma],
+  );
 
   const triggerVisionHarmonize = useCallback(
     async (goalPrompt = 'cohesive museum exhibition composition'): Promise<DirectorResult | null> => {
@@ -275,28 +306,30 @@ export function App() {
   );
 
   const handleTranscriptUpdate = useCallback(
-    (u: EarlybirdTranscriptUpdate) => {
+    (u: EarlybirdTranscriptUpdate, skipClientResolve = false) => {
       setLiveUpdate(u);
       if (fadeTimerRef.current) window.clearTimeout(fadeTimerRef.current);
 
       if (u.isFinal) {
         lastSpecKeyRef.current = '';
-        const { sourceHint, targetHint } = extractEntityPairHints(u.text);
-        void resolveViaBestEngine({
-          requestId: reqCounterRef.current++,
-          utteranceId: u.utteranceId,
-          phase: 'commit',
-          text: u.text,
-          ghostText: '',
-          words: u.words,
-          sourceHint,
-          targetHint,
-        });
+        if (!skipClientResolve) {
+          const { sourceHint, targetHint } = extractEntityPairHints(u.text);
+          void resolveViaBestEngine({
+            requestId: reqCounterRef.current++,
+            utteranceId: u.utteranceId,
+            phase: 'commit',
+            text: u.text,
+            ghostText: '',
+            words: u.words,
+            sourceHint,
+            targetHint,
+          });
+        }
 
         fadeTimerRef.current = window.setTimeout(() => {
           setLiveUpdate(null);
-        }, 2600);
-      } else {
+        }, 2000);
+      } else if (!skipClientResolve) {
         const solidWords = u.words.filter(([, p]) => p >= 0.38).map(([w]) => w);
         const ghostWords = u.ghost.filter(([, p]) => p >= 0.36).map(([w]) => w);
         const specText = solidWords.join(' ').trim();
@@ -466,6 +499,9 @@ export function App() {
         if (result?.summary) {
           setLastInscription(result.summary);
         }
+        if (result?.ideateTarget) {
+          enrichTopicBlueprint(result.ideateTarget);
+        }
         syncShapesToGemma();
 
         const pending = pendingSpeakResolversRef.current.get(msg.payload.requestId);
@@ -505,7 +541,7 @@ export function App() {
         } else if (msg.type === 'error') {
           if (!cloudReadyRef.current) setErrorMsg(msg.message);
         } else if (msg.type === 'update') {
-          handleTranscriptUpdate(msg.payload);
+          handleTranscriptUpdate(msg.payload, false);
         }
       };
 
@@ -551,16 +587,20 @@ export function App() {
             if (msg.type === 'ready') {
               window.clearTimeout(connectTimer);
               cloudReadyRef.current = true;
+              zeroRttWsRef.current = Boolean(msg.zeroRttResolve);
               setCloudStudioReady(true);
               setEbProgress(100);
               setGemmaProgress(100);
               setEbReady(true);
               setGemmaReady(true);
+              syncShapesToGemma();
               if (!isMobileConstrained) {
                 bootLocalSpeechAndGemmaWorkers();
               }
             } else if (msg.type === 'update' && msg.payload) {
-              handleTranscriptUpdate(msg.payload as EarlybirdTranscriptUpdate);
+              handleTranscriptUpdate(msg.payload as EarlybirdTranscriptUpdate, zeroRttWsRef.current);
+            } else if (msg.type === 'resolved' && msg.payload) {
+              handleResolvedSemantics(msg.payload as SemanticResolution);
             }
           } catch {
             // ignore malformed frame
@@ -577,13 +617,14 @@ export function App() {
         ws.onclose = () => {
           window.clearTimeout(connectTimer);
           wsRef.current = null;
+          zeroRttWsRef.current = false;
           if (!cancelled) {
             if (!ebWorkerRef.current && !isMobileConstrained) {
               bootLocalSpeechAndGemmaWorkers();
             } else if (!cloudReadyRef.current) {
               bootLocalSpeechAndGemmaWorkers();
             }
-            window.setTimeout(connectStudioSocket, 3000);
+            window.setTimeout(connectStudioSocket, 2200);
           }
         };
       } catch {
@@ -602,6 +643,7 @@ export function App() {
       micSessionRef.current?.stop();
     };
   }, [
+    enrichTopicBlueprint,
     handleResolvedSemantics,
     handleTranscriptUpdate,
     pushVuLevel,
@@ -730,7 +772,7 @@ export function App() {
           debounceId = window.setTimeout(() => {
             directorRef.current.animations.pruneDeletedShapes();
             syncShapesToGemma();
-          }, 650);
+          }, 180);
         },
         { source: 'user', scope: 'document' },
       );

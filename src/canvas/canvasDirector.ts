@@ -12,13 +12,16 @@ import {
   AESTHETIC_EDITIONS,
   LAYOUT_BLUEPRINTS,
   SHAPE_ARCHETYPES,
+  TOPIC_CONCEPT_LEXICON,
   type AestheticEdition,
   type BlueprintKind,
+  type LayoutBlueprint,
   type ShapeArchetype,
 } from '../design/catalog';
 import type {
   CanvasRegisterSnapshot,
   CanvasShapeSummary,
+  CanvasSyscall,
   SemanticResolution,
   SpatialAnchor,
   StateComputerDecision,
@@ -115,11 +118,18 @@ export function collectCanvasShapeSummaries(editor: Editor): CanvasShapeSummary[
   return out;
 }
 
+export interface IdeateEnrichmentTarget {
+  topic: string;
+  blueprintKind: BlueprintKind;
+  nodeIds: TLShapeId[];
+}
+
 export interface DirectorResult {
   summary: string;
   opcode?: string;
   changedAesthetic?: AestheticEdition;
   requestHarmonizeGoal?: string;
+  ideateTarget?: IdeateEnrichmentTarget;
 }
 
 export class CanvasDirector {
@@ -285,6 +295,8 @@ export class CanvasDirector {
     editor: Editor,
     anchor: SpatialAnchor | null,
     avoidOverlap = false,
+    footprintW = 190,
+    footprintH = 110,
   ): { cx: number; cy: number; isPortrait: boolean; vw: number; vh: number } {
     const bounds = editor.getViewportPageBounds();
     const screen = editor.getViewportScreenBounds();
@@ -299,43 +311,58 @@ export class CanvasDirector {
       if (anchor.includes('right')) cx = bounds.maxX - padX;
       if (anchor.includes('top')) cy = bounds.minY + padY;
       if (anchor.includes('bottom')) cy = bounds.maxY - padY;
-      return { cx, cy, isPortrait, vw: bounds.w, vh: bounds.h };
+      if (!avoidOverlap) {
+        return { cx, cy, isPortrait, vw: bounds.w, vh: bounds.h };
+      }
     }
 
-    // Smart non-overlapping gallery slot finder so newly created shapes don't pile blindly onto existing ones!
+    // Concentric spiral gallery slot finder: supports 60+ rapid-fire shapes without ever piling up!
     if (avoidOverlap) {
       const existing = editor
         .getCurrentPageShapes()
-        .filter((s) => !s.meta?.speculative && s.type !== 'arrow')
+        .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && s.type !== 'frame')
         .map((s) => editor.getShapePageBounds(s.id))
         .filter((b): b is NonNullable<typeof b> => Boolean(b));
 
       if (existing.length > 0) {
-        const stepX = isPortrait ? 195 : 235;
-        const stepY = isPortrait ? 150 : 160;
-        const candidateOffsets: [number, number][] = [
-          [0, 0],
-          [stepX, 0],
-          [-stepX, 0],
-          [0, stepY],
-          [0, -stepY],
-          [stepX, stepY],
-          [-stepX, stepY],
-          [stepX, -stepY],
-          [-stepX, -stepY],
-          [0, stepY * 1.9],
-        ];
+        const stepX = Math.max(footprintW + 32, isPortrait ? 190 : 230);
+        const stepY = Math.max(footprintH + 28, isPortrait ? 140 : 150);
+        const halfW = footprintW * 0.5 + 16;
+        const halfH = footprintH * 0.5 + 14;
 
-        for (const [ox, oy] of candidateOffsets) {
-          const tx = cx + ox;
-          const ty = cy + oy;
-          const collides = existing.some(
-            (b) => Math.abs(b.midX - tx) < b.w * 0.5 + 75 && Math.abs(b.midY - ty) < b.h * 0.5 + 55,
+        const collidesAt = (tx: number, ty: number) =>
+          existing.some(
+            (b) => Math.abs(b.midX - tx) < b.w * 0.5 + halfW && Math.abs(b.midY - ty) < b.h * 0.5 + halfH,
           );
-          if (!collides) {
-            cx = tx;
-            cy = ty;
-            break;
+
+        if (collidesAt(cx, cy)) {
+          let placed = false;
+          for (let ring = 1; ring <= 10 && !placed; ring++) {
+            const ringCandidates: [number, number][] = [];
+            // Prioritize cardinal slots on the ring first, then perimeter slots
+            ringCandidates.push(
+              [ring * stepX, 0],
+              [-ring * stepX, 0],
+              [0, ring * stepY],
+              [0, -ring * stepY],
+            );
+            for (let dx = -ring; dx <= ring; dx++) {
+              for (let dy = -ring; dy <= ring; dy++) {
+                if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+                if ((dx === 0 || dy === 0) && Math.abs(dx + dy) === ring) continue;
+                ringCandidates.push([dx * stepX, dy * stepY]);
+              }
+            }
+            for (const [ox, oy] of ringCandidates) {
+              const tx = cx + ox;
+              const ty = cy + oy;
+              if (!collidesAt(tx, ty)) {
+                cx = tx;
+                cy = ty;
+                placed = true;
+                break;
+              }
+            }
           }
         }
       }
@@ -347,20 +374,32 @@ export class CanvasDirector {
   private inferArchetypeForLabel(label: string): ShapeArchetype {
     const l = label.toLowerCase();
     const byId = (id: string) => SHAPE_ARCHETYPES.find((a) => a.id === id) ?? SHAPE_ARCHETYPES[0];
-    if (/\b(db|database|postgres|sql|redis|cache|store|vector|bucket|storage|warehouse|queue)\b/.test(l)) {
+    if (/\b(db|database|postgres|sql|redis|cache|store|vector|bucket|storage|warehouse|s3|disk)\b/.test(l)) {
       return byId('arch-database');
     }
-    if (/\b(gateway|engine|worker|processor|model|kernel|api|service|server)\b/.test(l)) {
+    if (/\b(queue|kafka|stream|event|topic|pubsub|buffer|io|input|output)\b/.test(l)) {
+      return byId('arch-rhombus');
+    }
+    if (/\b(firewall|guard|security|waf|policy|stop|blocker)\b/.test(l)) {
+      return byId('arch-octagon');
+    }
+    if (/\b(gateway|engine|worker|processor|model|kernel|api|service|server|node|pod|compute|llm)\b/.test(l)) {
       return byId('arch-hexagon');
     }
-    if (/\b(cloud|cdn|internet|aws|gcp|edge|network)\b/.test(l)) {
+    if (/\b(cloud|cdn|internet|aws|gcp|edge|network|dns)\b/.test(l)) {
       return byId('arch-cloud');
     }
-    if (/\b(client|user|mobile|phone|browser|actor|session|app)\b/.test(l)) {
+    if (/\b(sun|earth|mars|venus|mercury|moon|planet|star|hub|atom|nucleus|electron)\b/.test(l)) {
+      return byId('arch-circle');
+    }
+    if (/\b(client|user|mobile|phone|browser|actor|session|app|start|end|idle)\b/.test(l)) {
       return byId('arch-pill');
     }
-    if (/\b(decision|router|auth|check|gate|branch|guard)\b/.test(l)) {
+    if (/\b(decision|router|auth|check|gate|branch|if|verify)\b/.test(l)) {
       return byId('arch-diamond');
+    }
+    if (/\b(done|complete|verified|task|todo)\b/.test(l)) {
+      return byId('arch-checkbox');
     }
     if (/\b(note|memo|sticky)\b/.test(l)) {
       return byId('arch-sticky');
@@ -425,10 +464,19 @@ export class CanvasDirector {
     speculative: boolean,
     utteranceId: number,
     edgeLabel?: string | null,
+    arrowOverride?: { kind?: 'arc' | 'elbow'; bend?: number },
   ): void {
     const fromBounds = editor.getShapePageBounds(fromId);
     const toBounds = editor.getShapePageBounds(toId);
     if (!fromBounds || !toBounds) return;
+
+    const arrowKind = arrowOverride?.kind ?? edition.tokens.arrowKind;
+    const arrowBend =
+      arrowOverride?.bend !== undefined
+        ? arrowOverride.bend
+        : arrowKind === 'arc'
+          ? edition.tokens.arrowBend || 24
+          : 0;
 
     const arrowId = createShapeId();
     editor.createShape({
@@ -439,7 +487,7 @@ export class CanvasDirector {
       opacity: speculative ? 0.28 : 1,
       meta: { speculative, utteranceId, role: 'muted' },
       props: {
-        kind: edition.tokens.arrowKind,
+        kind: arrowKind,
         color: edition.tokens.connectorColor,
         labelColor: edition.tokens.primaryColor,
         font: edition.tokens.font,
@@ -447,7 +495,7 @@ export class CanvasDirector {
         size: edition.tokens.size,
         arrowheadStart: 'none',
         arrowheadEnd: edition.tokens.arrowheadEnd,
-        bend: edition.tokens.arrowKind === 'arc' ? edition.tokens.arrowBend : 0,
+        bend: arrowBend,
         start: { x: 0, y: 0 },
         end: { x: toBounds.midX - fromBounds.midX, y: toBounds.midY - fromBounds.midY },
         ...(edgeLabel ? { richText: toRichText(edgeLabel) } : {}),
@@ -496,6 +544,8 @@ export class CanvasDirector {
       label: string;
       role: ColorRole;
       colorOverride: TLDefaultColorStyle | null;
+      fillOverride?: AestheticEdition['tokens']['fill'] | null;
+      sizeOverride?: AestheticEdition['tokens']['size'] | null;
       slots: ParsedSlots;
       edition: AestheticEdition;
       speculative: boolean;
@@ -507,8 +557,11 @@ export class CanvasDirector {
     const color = opts.colorOverride ?? roleToColor(edition, role);
     const dash = speculative ? 'dashed' : (slots.dashOverride ?? edition.tokens.dash);
     const fill =
-      slots.fillOverride ?? (role === 'accent' ? edition.tokens.accentFill : edition.tokens.fill);
+      opts.fillOverride ??
+      slots.fillOverride ??
+      (role === 'accent' ? edition.tokens.accentFill : edition.tokens.fill);
     const font = slots.fontOverride ?? edition.tokens.font;
+    const size = opts.sizeOverride ?? slots.sizeOverride ?? edition.tokens.size;
     const opacity = speculative ? 0.28 : 1;
     const meta = {
       speculative,
@@ -528,7 +581,7 @@ export class CanvasDirector {
         props: {
           color,
           font,
-          size: edition.tokens.size,
+          size,
           richText: toRichText(opts.label),
         },
       });
@@ -543,7 +596,7 @@ export class CanvasDirector {
         props: {
           color,
           font: slots.fontOverride ?? edition.tokens.headingFont,
-          size: 'xl',
+          size: opts.sizeOverride ?? slots.sizeOverride ?? 'xl',
           textAlign: 'middle',
           autoSize: true,
           richText: toRichText(opts.label || 'Untitled Study'),
@@ -580,7 +633,7 @@ export class CanvasDirector {
           dash,
           fill,
           font,
-          size: edition.tokens.size,
+          size,
           align: 'middle',
           verticalAlign: 'middle',
           richText: toRichText(opts.label),
@@ -590,28 +643,81 @@ export class CanvasDirector {
     return id;
   }
 
+  public applyTopicEnrichment(editor: Editor, nodeIds: TLShapeId[], labels: string[]): void {
+    if (nodeIds.length === 0 || labels.length === 0) return;
+    editor.store.mergeRemoteChanges(() => {
+      const updates: unknown[] = [];
+      nodeIds.forEach((id, idx) => {
+        const nextLabel = labels[idx];
+        if (!nextLabel) return;
+        const shape = editor.getShape(id);
+        if (!shape || shape.meta?.locked) return;
+        if (shape.type === 'geo' || shape.type === 'note' || shape.type === 'text') {
+          updates.push({
+            id: shape.id,
+            type: shape.type,
+            props: { richText: toRichText(nextLabel) },
+          });
+        } else if (shape.type === 'frame') {
+          updates.push({
+            id: shape.id,
+            type: 'frame',
+            props: { name: nextLabel },
+          });
+        }
+      });
+      if (updates.length > 0) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        editor.updateShapes(updates as any);
+      }
+    });
+  }
+
   private renderCreateShapes(
     editor: Editor,
     res: SemanticResolution,
     slots: ParsedSlots,
     edition: AestheticEdition,
     speculative: boolean,
+    overrides?: {
+      archetypeId?: string | null;
+      color?: TLDefaultColorStyle | null;
+      label?: string | null;
+      listLabels?: string[];
+      arrangement?: ParsedSlots['arrangement'];
+      connectCreated?: boolean;
+      sizeOverride?: AestheticEdition['tokens']['size'] | null;
+    },
   ): TLShapeId[] {
-    const archetype =
-      SHAPE_ARCHETYPES.find((a) => a.id === res.archetypeId) ?? SHAPE_ARCHETYPES[0];
-    const count = Math.min(9, Math.max(1, slots.listLabels.length || slots.count || 1));
+    const archId = overrides?.archetypeId ?? slots.explicitArchetypeId ?? res.archetypeId;
+    const archetype = SHAPE_ARCHETYPES.find((a) => a.id === archId) ?? SHAPE_ARCHETYPES[0];
+    const listLabels = overrides?.listLabels ?? slots.listLabels;
+    const singleLabel = overrides?.label !== undefined ? overrides.label : slots.singleLabel;
+    const chosenColor = overrides?.color !== undefined ? overrides.color : (slots.explicitColor ?? res.color);
+    const count = Math.min(12, Math.max(1, listLabels.length || slots.count || 1));
+
+    const mode =
+      overrides?.arrangement ??
+      slots.arrangement ??
+      (count >= 4 ? 'grid' : count === 1 ? 'row' : 'row');
+
+    const gapX = Math.max(archetype.w + 42, edition.tokens.gapX);
+    const gapY = Math.max(archetype.h + 38, edition.tokens.gapY);
+    const estW = count === 1 ? archetype.w : mode === 'column' ? archetype.w : gapX * Math.min(count, 3);
+    const estH = count === 1 ? archetype.h : mode === 'row' ? archetype.h : gapY * Math.ceil(count / 3);
+
     const { cx, cy, isPortrait } = this.getViewportAnchorPoint(
       editor,
       slots.anchor,
-      count === 1 && !slots.anchor,
+      !speculative && !slots.anchor,
+      estW,
+      estH,
     );
 
-    const mode =
+    const effectiveMode =
+      overrides?.arrangement ??
       slots.arrangement ??
       (count >= 4 ? 'grid' : isPortrait && count >= 3 ? 'column' : 'row');
-
-    const gapX = Math.max(archetype.w + 44, edition.tokens.gapX);
-    const gapY = Math.max(archetype.h + 40, edition.tokens.gapY);
 
     const roles: ColorRole[] = ['primary', 'secondary', 'accent', 'muted'];
     const created: TLShapeId[] = [];
@@ -619,10 +725,20 @@ export class CanvasDirector {
     for (let i = 0; i < count; i++) {
       let x = cx;
       let y = cy;
-      if (mode === 'row') {
+      if (effectiveMode === 'row') {
         x = cx + (i - (count - 1) / 2) * gapX;
-      } else if (mode === 'column') {
+      } else if (effectiveMode === 'column') {
         y = cy + (i - (count - 1) / 2) * gapY;
+      } else if (effectiveMode === 'circle') {
+        const radius = Math.max(135, count * 34);
+        const angle = (i / count) * Math.PI * 2 - Math.PI / 2;
+        x = cx + Math.cos(angle) * radius;
+        y = cy + Math.sin(angle) * radius * 0.85;
+      } else if (effectiveMode === 'scatter') {
+        const golden = i * 2.3999632;
+        const r = i === 0 ? 0 : 115 * Math.sqrt(i);
+        x = cx + Math.cos(golden) * r;
+        y = cy + Math.sin(golden) * r * 0.82;
       } else {
         const cols = Math.ceil(Math.sqrt(count));
         const rows = Math.ceil(count / cols);
@@ -633,11 +749,11 @@ export class CanvasDirector {
       }
 
       const label =
-        slots.listLabels[i] ??
+        listLabels[i] ??
         (count === 1
-          ? (slots.singleLabel ?? '')
-          : slots.singleLabel
-            ? `${slots.singleLabel} ${i + 1}`
+          ? (singleLabel ?? '')
+          : singleLabel
+            ? `${singleLabel} ${i + 1}`
             : '');
 
       const role = count === 1 ? archetype.role : roles[i % roles.length];
@@ -651,7 +767,8 @@ export class CanvasDirector {
           geo: archetype.geo,
           label,
           role,
-          colorOverride: res.color,
+          colorOverride: chosenColor,
+          sizeOverride: overrides?.sizeOverride ?? slots.sizeOverride,
           slots,
           edition,
           speculative,
@@ -660,12 +777,76 @@ export class CanvasDirector {
       );
     }
 
-    if (slots.connectCreated && created.length >= 2) {
+    const shouldConnect = overrides?.connectCreated ?? slots.connectCreated;
+    if (shouldConnect && created.length >= 2) {
       for (let i = 0; i < created.length - 1; i++) {
         this.createBoundArrow(editor, created[i], created[i + 1], edition, speculative, res.utteranceId);
       }
     }
     return created;
+  }
+
+  private resolveBlueprintLabels(
+    bp: LayoutBlueprint,
+    rawText: string,
+    topic: string | null | undefined,
+    listLabels: string[],
+    singleLabel: string | null,
+  ): {
+    nodes: LayoutBlueprint['defaultNodes'];
+    needsAsyncIdeate: boolean;
+    cleanTopic: string | null;
+    hubCentric: boolean;
+  } {
+    const hubCentric = bp.id === 'mindmap' || bp.id === 'tree' || bp.id === 'orbit_system';
+
+    if (listLabels.length >= 2) {
+      const count = Math.max(bp.defaultNodes.length, Math.min(8, listLabels.length));
+      const roles: ColorRole[] = ['accent', 'primary', 'secondary', 'muted'];
+      const nodes: LayoutBlueprint['defaultNodes'] = [];
+      for (let i = 0; i < count; i++) {
+        const base = bp.defaultNodes[i] ?? bp.defaultNodes[bp.defaultNodes.length - 1];
+        nodes.push({
+          ...base,
+          role: base?.role ?? roles[i % roles.length],
+          geo: base?.geo ?? 'rectangle',
+          label: listLabels[i] ?? base?.label ?? `Stage ${i + 1}`,
+        });
+      }
+      return { nodes, needsAsyncIdeate: false, cleanTopic: null, hubCentric };
+    }
+
+    const searchHaystack = `${topic ?? ''} ${rawText}`.toLowerCase();
+    for (const [lexKey, concepts] of Object.entries(TOPIC_CONCEPT_LEXICON)) {
+      if (new RegExp(`\\b${lexKey}s?\\b`, 'i').test(searchHaystack)) {
+        const nodes = bp.defaultNodes.map((n, idx) => ({
+          ...n,
+          label: concepts[idx] ?? n.label,
+        }));
+        return { nodes, needsAsyncIdeate: false, cleanTopic: null, hubCentric };
+      }
+    }
+
+    const rawTopic = (topic ?? '').trim();
+    if (rawTopic.length >= 2) {
+      const titledTopic = rawTopic.replace(/\b\w/g, (m) => m.toUpperCase());
+      const nodes = bp.defaultNodes.map((n, idx) => ({
+        ...n,
+        label: idx === 0 && hubCentric ? titledTopic : idx === 0 && singleLabel ? singleLabel : n.label,
+      }));
+      return {
+        nodes,
+        needsAsyncIdeate: true,
+        cleanTopic: titledTopic,
+        hubCentric,
+      };
+    }
+
+    const nodes = bp.defaultNodes.map((n, idx) => ({
+      ...n,
+      label: idx === 0 && singleLabel ? singleLabel : n.label,
+    }));
+    return { nodes, needsAsyncIdeate: false, cleanTopic: null, hubCentric };
   }
 
   private renderBlueprint(
@@ -675,38 +856,76 @@ export class CanvasDirector {
     slots: ParsedSlots,
     edition: AestheticEdition,
     speculative: boolean,
-  ): TLShapeId[] {
+    overrides?: {
+      topic?: string | null;
+      listLabels?: string[];
+      anchor?: SpatialAnchor | null;
+      color?: TLDefaultColorStyle | null;
+    },
+  ): { ids: TLShapeId[]; ideateTarget?: IdeateEnrichmentTarget } {
+    const effectiveAnchor = overrides?.anchor !== undefined ? overrides.anchor : slots.anchor;
+    const effectiveList = overrides?.listLabels ?? slots.listLabels;
+    const effectiveColor = overrides?.color !== undefined ? overrides.color : (slots.explicitColor ?? res.color);
+    const effectiveTopic = overrides?.topic !== undefined ? overrides.topic : slots.topic;
+
     if (bpKind === 'row' || bpKind === 'column') {
-      return this.renderCreateShapes(
+      const ids = this.renderCreateShapes(
         editor,
         res,
-        { ...slots, arrangement: bpKind, count: slots.count ?? 3 },
+        { ...slots, anchor: effectiveAnchor, arrangement: bpKind, count: slots.count ?? 3 },
         edition,
         speculative,
+        { listLabels: effectiveList, color: effectiveColor },
       );
+      return { ids };
     }
 
     const bp = LAYOUT_BLUEPRINTS.find((b) => b.id === bpKind) ?? LAYOUT_BLUEPRINTS[0];
-    const { cx, cy, isPortrait } = this.getViewportAnchorPoint(editor, slots.anchor, !slots.anchor);
+    const { cx, cy, isPortrait } = this.getViewportAnchorPoint(
+      editor,
+      effectiveAnchor,
+      !speculative && !effectiveAnchor,
+      540,
+      360,
+    );
     const created: TLShapeId[] = [];
-    const nodes = bp.defaultNodes.map((n, idx) => ({
-      ...n,
-      label:
-        slots.listLabels[idx] ?? (idx === 0 && slots.singleLabel ? slots.singleLabel : n.label),
-    }));
+    const { nodes, needsAsyncIdeate, cleanTopic, hubCentric } = this.resolveBlueprintLabels(
+      bp,
+      res.rawText,
+      effectiveTopic,
+      effectiveList,
+      slots.singleLabel,
+    );
+
+    const buildReturn = (ids: TLShapeId[]): { ids: TLShapeId[]; ideateTarget?: IdeateEnrichmentTarget } => {
+      if (!speculative && needsAsyncIdeate && cleanTopic) {
+        const targetIds = hubCentric ? ids.slice(1) : ids;
+        if (targetIds.length >= 2) {
+          return {
+            ids,
+            ideateTarget: {
+              topic: cleanTopic,
+              blueprintKind: bpKind,
+              nodeIds: targetIds,
+            },
+          };
+        }
+      }
+      return { ids };
+    };
 
     if (bpKind === 'mindmap') {
       const centerNode = nodes[0];
       const hubId = this.spawnNode(editor, {
         x: cx,
         y: cy,
-        w: 175,
+        w: 180,
         h: 115,
         shapeType: 'geo',
         geo: 'ellipse',
         label: centerNode.label,
         role: 'accent',
-        colorOverride: res.color,
+        colorOverride: effectiveColor,
         slots,
         edition,
         speculative,
@@ -715,8 +934,8 @@ export class CanvasDirector {
       created.push(hubId);
 
       const branches = nodes.slice(1);
-      const rx = isPortrait ? 145 : 240;
-      const ry = isPortrait ? 195 : 165;
+      const rx = isPortrait ? 150 : 245;
+      const ry = isPortrait ? 195 : 170;
       branches.forEach((b, idx) => {
         const angle = (idx / branches.length) * Math.PI * 2 - Math.PI / 2;
         const bx = cx + Math.cos(angle) * rx;
@@ -724,7 +943,7 @@ export class CanvasDirector {
         const bid = this.spawnNode(editor, {
           x: bx,
           y: by,
-          w: 155,
+          w: 158,
           h: 82,
           shapeType: 'geo',
           geo: b.geo === 'note' ? 'rectangle' : b.geo,
@@ -739,7 +958,504 @@ export class CanvasDirector {
         created.push(bid);
         this.createBoundArrow(editor, hubId, bid, edition, speculative, res.utteranceId);
       });
-      return created;
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'orbit_system') {
+      const hubNode = nodes[0];
+      const hubId = this.spawnNode(editor, {
+        x: cx,
+        y: cy,
+        w: 132,
+        h: 132,
+        shapeType: 'geo',
+        geo: 'ellipse',
+        label: hubNode.label,
+        role: 'accent',
+        colorOverride: effectiveColor ?? 'yellow',
+        fillOverride: 'solid',
+        slots,
+        edition,
+        speculative,
+        utteranceId: res.utteranceId,
+      });
+      created.push(hubId);
+
+      const satellites = nodes.slice(1);
+      satellites.forEach((sat, idx) => {
+        const radius = (isPortrait ? 115 : 140) + idx * (isPortrait ? 48 : 62);
+        const angle = idx * 1.85 - Math.PI / 3;
+        const sx = cx + Math.cos(angle) * radius;
+        const sy = cy + Math.sin(angle) * radius * 0.82;
+        const dim = Math.max(76, 98 - idx * 5);
+        const sid = this.spawnNode(editor, {
+          x: sx,
+          y: sy,
+          w: dim,
+          h: dim,
+          shapeType: 'geo',
+          geo: 'ellipse',
+          label: sat.label,
+          role: sat.role,
+          colorOverride: null,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        });
+        created.push(sid);
+        if (!speculative) {
+          this.animations.setAnimation([sid], {
+            kind: 'orbit',
+            anchorShapeId: hubId,
+            speed: Math.max(0.45, 1.18 - idx * 0.17),
+            intensity: 1,
+            direction: 'cw',
+          });
+        }
+      });
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'cycle') {
+      const ringNodes = nodes.slice(0, 6);
+      const rx = isPortrait ? 140 : 205;
+      const ry = isPortrait ? 175 : 160;
+      ringNodes.forEach((n, idx) => {
+        const angle = (idx / ringNodes.length) * Math.PI * 2 - Math.PI / 2;
+        const nx = cx + Math.cos(angle) * rx;
+        const ny = cy + Math.sin(angle) * ry;
+        created.push(
+          this.spawnNode(editor, {
+            x: nx,
+            y: ny,
+            w: 162,
+            h: 78,
+            shapeType: 'geo',
+            geo: n.geo === 'note' ? 'oval' : n.geo,
+            label: n.label,
+            role: n.role,
+            colorOverride: effectiveColor,
+            slots,
+            edition,
+            speculative,
+            utteranceId: res.utteranceId,
+          }),
+        );
+      });
+      for (let i = 0; i < created.length; i++) {
+        const nextIdx = (i + 1) % created.length;
+        this.createBoundArrow(editor, created[i], created[nextIdx], edition, speculative, res.utteranceId, null, {
+          kind: 'arc',
+          bend: -26,
+        });
+      }
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'tree') {
+      const root = nodes[0];
+      const rootId = this.spawnNode(editor, {
+        x: cx,
+        y: cy - 150,
+        w: 195,
+        h: 82,
+        shapeType: 'geo',
+        geo: 'rectangle',
+        label: root.label,
+        role: 'accent',
+        colorOverride: effectiveColor,
+        slots,
+        edition,
+        speculative,
+        utteranceId: res.utteranceId,
+      });
+      created.push(rootId);
+
+      const tier1 = nodes.slice(1, 4);
+      const tier2 = nodes.slice(4);
+      const gap1 = isPortrait ? 170 : 220;
+      const tier1Ids: TLShapeId[] = [];
+
+      tier1.forEach((n, idx) => {
+        const tx = cx + (idx - (tier1.length - 1) / 2) * gap1;
+        const ty = cy - 10;
+        const tid = this.spawnNode(editor, {
+          x: tx,
+          y: ty,
+          w: 162,
+          h: 76,
+          shapeType: 'geo',
+          geo: n.geo === 'note' ? 'rectangle' : n.geo,
+          label: n.label,
+          role: n.role,
+          colorOverride: null,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        });
+        created.push(tid);
+        tier1Ids.push(tid);
+        this.createBoundArrow(editor, rootId, tid, edition, speculative, res.utteranceId);
+      });
+
+      tier2.forEach((n, idx) => {
+        const parentIdx = idx % Math.max(1, tier1Ids.length);
+        const parentId = tier1Ids[parentIdx] ?? rootId;
+        const pBounds = editor.getShapePageBounds(parentId);
+        const lx = pBounds ? pBounds.midX : cx + (idx - (tier2.length - 1) / 2) * gap1;
+        const ly = cy + 130;
+        const lid = this.spawnNode(editor, {
+          x: lx,
+          y: ly,
+          w: 150,
+          h: 68,
+          shapeType: 'geo',
+          geo: n.geo === 'note' ? 'oval' : n.geo,
+          label: n.label,
+          role: n.role,
+          colorOverride: null,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        });
+        created.push(lid);
+        this.createBoundArrow(editor, parentId, lid, edition, speculative, res.utteranceId);
+      });
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'venn') {
+      const vennNodes = nodes.slice(0, 3);
+      const offsets: [number, number][] =
+        vennNodes.length === 2
+          ? [
+              [-72, 0],
+              [72, 0],
+            ]
+          : [
+              [-74, -42],
+              [74, -42],
+              [0, 62],
+            ];
+      const roles: ColorRole[] = ['primary', 'secondary', 'accent'];
+      vennNodes.forEach((n, idx) => {
+        const [ox, oy] = offsets[idx] ?? [0, 0];
+        created.push(
+          this.spawnNode(editor, {
+            x: cx + ox,
+            y: cy + oy,
+            w: 225,
+            h: 225,
+            shapeType: 'geo',
+            geo: 'ellipse',
+            label: n.label,
+            role: roles[idx % roles.length],
+            colorOverride: idx === 0 && effectiveColor ? effectiveColor : null,
+            fillOverride: 'semi',
+            slots,
+            edition,
+            speculative,
+            utteranceId: res.utteranceId,
+          }),
+        );
+      });
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'funnel') {
+      const stages = nodes.slice(0, 5);
+      const stepY = 98;
+      stages.forEach((n, idx) => {
+        const w = Math.max(145, 330 - idx * 54);
+        const y = cy + (idx - (stages.length - 1) / 2) * stepY;
+        created.push(
+          this.spawnNode(editor, {
+            x: cx,
+            y,
+            w,
+            h: 72,
+            shapeType: 'geo',
+            geo: 'trapezoid',
+            label: n.label,
+            role: n.role,
+            colorOverride: idx === stages.length - 1 ? effectiveColor : null,
+            slots,
+            edition,
+            speculative,
+            utteranceId: res.utteranceId,
+          }),
+        );
+      });
+      for (let i = 0; i < created.length - 1; i++) {
+        this.createBoundArrow(editor, created[i], created[i + 1], edition, speculative, res.utteranceId);
+      }
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'neural') {
+      const colStep = isPortrait ? 165 : 235;
+      const inputs = nodes.slice(0, 2);
+      const hidden = nodes.slice(2, 5);
+      const outputs = nodes.slice(5, 6);
+
+      const inIds = inputs.map((n, i) =>
+        this.spawnNode(editor, {
+          x: cx - colStep,
+          y: cy + (i - (inputs.length - 1) / 2) * 125,
+          w: 132,
+          h: 88,
+          shapeType: 'geo',
+          geo: 'ellipse',
+          label: n.label,
+          role: n.role,
+          colorOverride: null,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        }),
+      );
+      const hidIds = hidden.map((n, i) =>
+        this.spawnNode(editor, {
+          x: cx,
+          y: cy + (i - (hidden.length - 1) / 2) * 115,
+          w: 148,
+          h: 96,
+          shapeType: 'geo',
+          geo: 'hexagon',
+          label: n.label,
+          role: n.role,
+          colorOverride: effectiveColor,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        }),
+      );
+      const outIds = outputs.map((n, i) =>
+        this.spawnNode(editor, {
+          x: cx + colStep,
+          y: cy + (i - (outputs.length - 1) / 2) * 115,
+          w: 150,
+          h: 88,
+          shapeType: 'geo',
+          geo: 'oval',
+          label: n.label,
+          role: 'accent',
+          colorOverride: null,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        }),
+      );
+
+      created.push(...inIds, ...hidIds, ...outIds);
+      for (const iid of inIds) {
+        for (const hid of hidIds) {
+          this.createBoundArrow(editor, iid, hid, edition, speculative, res.utteranceId);
+        }
+      }
+      for (const hid of hidIds) {
+        for (const oid of outIds) {
+          this.createBoundArrow(editor, hid, oid, edition, speculative, res.utteranceId);
+        }
+      }
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'wireframe') {
+      const frameW = isPortrait ? 310 : 420;
+      const frameH = 420;
+      const frameTitle = cleanTopic ? `${cleanTopic} · Screen` : 'Product Wireframe';
+      const frameId = this.spawnNode(editor, {
+        x: cx,
+        y: cy,
+        w: frameW,
+        h: frameH,
+        shapeType: 'frame',
+        label: frameTitle,
+        role: 'muted',
+        colorOverride: null,
+        slots,
+        edition,
+        speculative,
+        utteranceId: res.utteranceId,
+      });
+      if (!speculative) editor.sendToBack([frameId]);
+
+      const innerW = frameW - 52;
+      const navId = this.spawnNode(editor, {
+        x: cx,
+        y: cy - 148,
+        w: innerW,
+        h: 52,
+        shapeType: 'geo',
+        geo: 'rectangle',
+        label: nodes[0]?.label ?? 'Navigation',
+        role: 'muted',
+        colorOverride: null,
+        slots,
+        edition,
+        speculative,
+        utteranceId: res.utteranceId,
+      });
+      const heroId = this.spawnNode(editor, {
+        x: cx,
+        y: cy - 34,
+        w: innerW,
+        h: 132,
+        shapeType: 'geo',
+        geo: 'rectangle',
+        label: nodes[1]?.label ?? 'Hero Showcase',
+        role: 'primary',
+        colorOverride: null,
+        slots,
+        edition,
+        speculative,
+        utteranceId: res.utteranceId,
+      });
+      const inputId = this.spawnNode(editor, {
+        x: cx,
+        y: cy + 78,
+        w: innerW,
+        h: 54,
+        shapeType: 'geo',
+        geo: 'oval',
+        label: nodes[2]?.label ?? 'Input Field',
+        role: 'secondary',
+        colorOverride: null,
+        slots,
+        edition,
+        speculative,
+        utteranceId: res.utteranceId,
+      });
+      const ctaId = this.spawnNode(editor, {
+        x: cx,
+        y: cy + 150,
+        w: Math.min(210, innerW),
+        h: 54,
+        shapeType: 'geo',
+        geo: 'oval',
+        label: nodes[3]?.label ?? 'Continue',
+        role: 'accent',
+        colorOverride: effectiveColor,
+        fillOverride: 'solid',
+        slots,
+        edition,
+        speculative,
+        utteranceId: res.utteranceId,
+      });
+      created.push(navId, heroId, inputId, ctaId);
+      return buildReturn([frameId, ...created]);
+    }
+
+    if (bpKind === 'layers') {
+      const barW = isPortrait ? 310 : 440;
+      const stepY = 82;
+      nodes.forEach((n, idx) => {
+        const y = cy + (idx - (nodes.length - 1) / 2) * stepY;
+        created.push(
+          this.spawnNode(editor, {
+            x: cx,
+            y,
+            w: barW,
+            h: 66,
+            shapeType: 'geo',
+            geo: 'rectangle',
+            label: n.label,
+            role: n.role,
+            colorOverride: idx === 0 ? effectiveColor : null,
+            slots,
+            edition,
+            speculative,
+            utteranceId: res.utteranceId,
+          }),
+        );
+      });
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'comparison') {
+      const colOffset = isPortrait ? 105 : 135;
+      const cardW = isPortrait ? 185 : 235;
+      const pairs = Math.ceil(nodes.length / 2);
+      nodes.forEach((n, idx) => {
+        const col = idx % 2;
+        const row = Math.floor(idx / 2);
+        const isHeader = row === 0;
+        created.push(
+          this.spawnNode(editor, {
+            x: cx + (col === 0 ? -colOffset : colOffset),
+            y: cy + (row - (pairs - 1) / 2) * 96,
+            w: cardW,
+            h: isHeader ? 68 : 78,
+            shapeType: 'geo',
+            geo: 'rectangle',
+            label: n.label,
+            role: n.role,
+            colorOverride: col === 1 && isHeader ? effectiveColor : null,
+            fillOverride: isHeader && col === 1 ? 'solid' : undefined,
+            slots,
+            edition,
+            speculative,
+            utteranceId: res.utteranceId,
+          }),
+        );
+      });
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'state_machine') {
+      const stepX = isPortrait ? 0 : 215;
+      const stepY = isPortrait ? 130 : 0;
+      nodes.forEach((n, idx) => {
+        created.push(
+          this.spawnNode(editor, {
+            x: cx + (idx - (nodes.length - 1) / 2) * stepX,
+            y: cy + (idx - (nodes.length - 1) / 2) * stepY,
+            w: 165,
+            h: 82,
+            shapeType: 'geo',
+            geo: n.geo === 'note' ? 'oval' : n.geo,
+            label: n.label,
+            role: n.role,
+            colorOverride: idx === 2 ? effectiveColor : null,
+            slots,
+            edition,
+            speculative,
+            utteranceId: res.utteranceId,
+          }),
+        );
+      });
+      const edgeVerbs = ['arm', 'active', 'commit', 'next'];
+      for (let i = 0; i < created.length - 1; i++) {
+        this.createBoundArrow(
+          editor,
+          created[i],
+          created[i + 1],
+          edition,
+          speculative,
+          res.utteranceId,
+          edgeVerbs[i] ?? null,
+        );
+      }
+      if (created.length >= 3) {
+        this.createBoundArrow(
+          editor,
+          created[created.length - 1],
+          created[0],
+          edition,
+          speculative,
+          res.utteranceId,
+          'reset',
+          { kind: 'arc', bend: 54 },
+        );
+      }
+      return buildReturn(created);
     }
 
     if (bpKind === 'quadrant' || bpKind === 'bento') {
@@ -760,7 +1476,7 @@ export class CanvasDirector {
             geo: n.geo === 'note' ? 'rectangle' : n.geo,
             label: n.label,
             role: n.role,
-            colorOverride: res.color,
+            colorOverride: effectiveColor,
             slots,
             edition,
             speculative,
@@ -768,7 +1484,7 @@ export class CanvasDirector {
           }),
         );
       });
-      return created;
+      return buildReturn(created);
     }
 
     if (bpKind === 'kanban') {
@@ -800,7 +1516,7 @@ export class CanvasDirector {
           shapeType: 'note',
           label: cIdx === 0 ? 'Explore' : cIdx === 1 ? 'In Studio' : 'Complete',
           role: col.role,
-          colorOverride: res.color,
+          colorOverride: effectiveColor,
           slots,
           edition,
           speculative,
@@ -808,7 +1524,7 @@ export class CanvasDirector {
         });
         created.push(cardId);
       });
-      return created;
+      return buildReturn(created);
     }
 
     const vertical = isPortrait && bpKind !== 'timeline';
@@ -827,7 +1543,7 @@ export class CanvasDirector {
         geo: n.geo === 'note' ? 'rectangle' : n.geo,
         label: n.label,
         role: n.role,
-        colorOverride: res.color,
+        colorOverride: effectiveColor,
         slots,
         edition,
         speculative,
@@ -839,10 +1555,53 @@ export class CanvasDirector {
     for (let i = 0; i < created.length - 1; i++) {
       this.createBoundArrow(editor, created[i], created[i + 1], edition, speculative, res.utteranceId);
     }
-    return created;
+    return buildReturn(created);
   }
 
-  private resolveShapesFromRegs(editor: Editor, regs: string[]): TLShape[] {
+  private getPlainShapeLabel(shape: TLShape): string {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const props = shape.props as any;
+    if (typeof props?.name === 'string' && props.name) return props.name.trim();
+    return extractRichTextPlain(props?.richText);
+  }
+
+  private findShapeByLabelHint(editor: Editor, hint?: string | null, excludeId?: TLShapeId): TLShape | null {
+    if (!hint) return null;
+    const needle = hint
+      .toLowerCase()
+      .replace(/^(the|a|an|that|this|my)\s+/i, '')
+      .trim();
+    if (!needle) return null;
+
+    const candidates = editor
+      .getCurrentPageShapes()
+      .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && s.id !== excludeId);
+
+    // 1. Exact label match (prefer most recently created)
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const s = candidates[i];
+      if (this.getPlainShapeLabel(s).toLowerCase() === needle) return s;
+    }
+
+    // 2. Substring label match or color+shape descriptor match
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const s = candidates[i];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const props = s.props as any;
+      const lbl = this.getPlainShapeLabel(s).toLowerCase();
+      const desc = `${props?.color ?? ''} ${props?.geo ?? s.type} ${lbl}`.toLowerCase();
+      if ((lbl && (lbl.includes(needle) || needle.includes(lbl))) || desc.includes(needle)) {
+        return s;
+      }
+    }
+    return null;
+  }
+
+  private resolveShapesFromRegs(
+    editor: Editor,
+    regs: string[],
+    labelHint?: string | null,
+  ): TLShape[] {
     const all = editor
       .getCurrentPageShapes()
       .filter((s) => !s.meta?.speculative && s.type !== 'arrow');
@@ -857,6 +1616,11 @@ export class CanvasDirector {
     });
     if (matched.length > 0) return matched;
 
+    if (labelHint) {
+      const hinted = this.findShapeByLabelHint(editor, labelHint);
+      if (hinted) return [hinted];
+    }
+
     const selected = editor.getSelectedShapes().filter((s) => !s.meta?.speculative);
     if (selected.length > 0) return selected;
 
@@ -867,24 +1631,29 @@ export class CanvasDirector {
     return [all[all.length - 1]];
   }
 
-  private findShapeByReg(editor: Editor, reg?: string | null): TLShape | null {
-    if (!reg) return null;
-    const target = reg.toLowerCase();
-    return (
-      editor
-        .getCurrentPageShapes()
-        .find(
-          (s) =>
-            !s.meta?.speculative &&
-            typeof s.meta?.reg === 'string' &&
-            s.meta.reg.toLowerCase() === target,
-        ) ?? null
-    );
+  private findShapeByReg(editor: Editor, reg?: string | null, labelHint?: string | null): TLShape | null {
+    if (reg) {
+      const target = reg.toLowerCase();
+      const byReg =
+        editor
+          .getCurrentPageShapes()
+          .find(
+            (s) =>
+              !s.meta?.speculative &&
+              typeof s.meta?.reg === 'string' &&
+              s.meta.reg.toLowerCase() === target,
+          ) ?? null;
+      if (byReg) return byReg;
+    }
+    if (labelHint) {
+      return this.findShapeByLabelHint(editor, labelHint);
+    }
+    return null;
   }
 
   /**
    * 1. SPECULATIVE GHOST PREVIEW (256d MRL + Earlybird -90ms predictions)
-   * Strictly non-destructive: NEVER deletes or mutates permanent shapes!
+   * In-place morphs existing ghost nodes when utteranceId & count match so rapid speech never flickers!
    */
   public executeSpeculative(
     editor: Editor,
@@ -894,11 +1663,10 @@ export class CanvasDirector {
     const slots = parseVoiceSlots(res.rawText, res.ghostText);
     if (slots.wordCount < 2) return null;
 
-    // Never preview if any destructive, movement, or animation keyword is present
     if (
       slots.animationKind !== null ||
       slots.spatialRelation !== null ||
-      /\b(move|shift|nudge|slide|put|place|swap|delete|remove|erase|clear|undo|redo|connect|color|paint|spin|orbit|float|bounce|pulse|stop|freeze)\b/i.test(
+      /\b(move|shift|nudge|slide|put|place|swap|delete|remove|erase|clear|undo|redo|connect|color|paint|spin|orbit|float|bounce|pulse|stop|freeze|rotate|align|distribute|duplicate|frame)\b/i.test(
         slots.cleanText,
       )
     ) {
@@ -906,6 +1674,7 @@ export class CanvasDirector {
     }
 
     const effectiveIntent = slots.lexicalIntent ?? res.intentKind;
+    const isBlueprint = effectiveIntent === 'compose_layout' || res.blueprintScore >= 0.7;
     const canPreview =
       (effectiveIntent === 'create_shape' && res.intentScore >= 0.56) ||
       (effectiveIntent === 'compose_layout' && (res.intentScore >= 0.56 || res.blueprintScore >= 0.62));
@@ -913,14 +1682,58 @@ export class CanvasDirector {
     if (!canPreview) return null;
 
     editor.store.mergeRemoteChanges(() => {
-      const oldSpec = editor
+      const existingSpecs = editor
         .getCurrentPageShapes()
-        .filter((s) => Boolean(s.meta?.speculative))
-        .map((s) => s.id);
-      if (oldSpec.length > 0) editor.deleteShapes(oldSpec);
+        .filter((s) => Boolean(s.meta?.speculative));
 
-      if (effectiveIntent === 'compose_layout' || res.blueprintScore >= 0.7) {
-        this.renderBlueprint(editor, res.blueprintId, res, slots, currentEdition, true);
+      const archId = slots.explicitArchetypeId ?? res.archetypeId;
+      const archetype = SHAPE_ARCHETYPES.find((a) => a.id === archId) ?? SHAPE_ARCHETYPES[0];
+      const desiredCount = Math.min(12, Math.max(1, slots.listLabels.length || slots.count || 1));
+
+      // Fast in-place morph path for single/multi geo shape previews within the same utterance!
+      if (
+        !isBlueprint &&
+        archetype.shapeType === 'geo' &&
+        desiredCount === 1 &&
+        existingSpecs.length === 1 &&
+        existingSpecs[0].type === 'geo' &&
+        existingSpecs[0].meta?.utteranceId === res.utteranceId
+      ) {
+        const s = existingSpecs[0];
+        const b = editor.getShapePageBounds(s.id);
+        const cx = b ? b.midX : s.x + archetype.w / 2;
+        const cy = b ? b.midY : s.y + archetype.h / 2;
+        const color =
+          slots.explicitColor ?? res.color ?? roleToColor(currentEdition, archetype.role);
+        editor.updateShape({
+          id: s.id,
+          type: 'geo',
+          x: cx - archetype.w / 2,
+          y: cy - archetype.h / 2,
+          props: {
+            geo: archetype.geo ?? 'rectangle',
+            w: archetype.w,
+            h: archetype.h,
+            color,
+            richText: toRichText(slots.singleLabel ?? ''),
+          },
+        });
+        return;
+      }
+
+      if (existingSpecs.length > 0) {
+        editor.deleteShapes(existingSpecs.map((s) => s.id));
+      }
+
+      if (isBlueprint) {
+        this.renderBlueprint(
+          editor,
+          slots.explicitBlueprintId ?? res.blueprintId,
+          res,
+          slots,
+          currentEdition,
+          true,
+        );
       } else {
         this.renderCreateShapes(editor, res, slots, currentEdition, true);
       }
@@ -930,7 +1743,8 @@ export class CanvasDirector {
   }
 
   /**
-   * 2. COMMIT EXECUTION (Driven by Model 3: Qwen Canvas State Computer)
+   * 2. COMMIT EXECUTION (Driven by Superscalar + Qwen Canvas State Computer)
+   * Executes single OR multi-clause compound syscall batches inside a single atomic tldraw transaction!
    */
   public executeStateDecision(
     editor: Editor,
@@ -938,11 +1752,12 @@ export class CanvasDirector {
     currentEdition: AestheticEdition,
     onEditionChange: (ed: AestheticEdition) => void,
   ): DirectorResult | null {
-    const { syscall, resolution: res, rawOpcodeLine } = decision;
-    const slots = parseVoiceSlots(res.rawText, res.ghostText);
+    const { resolution: res, rawOpcodeLine } = decision;
+    const batch =
+      decision.syscalls && decision.syscalls.length > 0 ? decision.syscalls : [decision.syscall];
 
-    // If commit returned NOOP while speculative shapes exist for THIS utterance, crystallize them so they NEVER disappear!
-    if (syscall.op === 'NOOP') {
+    // Safety handoff: if commit returned only NOOP while speculative shapes exist for THIS utterance, crystallize!
+    if (batch.length === 1 && batch[0].op === 'NOOP') {
       if (res.meanWordConfidence >= 0.42) {
         const crystallized = this.crystallizeSpeculativeShapes(
           editor,
@@ -960,54 +1775,115 @@ export class CanvasDirector {
       return null;
     }
 
-    // Clear speculative ghost previews before applying committed permanent instruction
-    this.clearSpeculativeShapes(editor);
-
-    // Check embedded aesthetic shift alongside creation/styling commands
+    const slots = parseVoiceSlots(res.rawText, res.ghostText);
     let activeEdition = currentEdition;
     let changedAesthetic: AestheticEdition | undefined;
-    if (syscall.op === 'AESTHETIC' || res.aestheticScore >= 0.75) {
-      const targetId = syscall.op === 'AESTHETIC' ? (syscall.aestheticId ?? res.aestheticId) : res.aestheticId;
-      const foundEd = AESTHETIC_EDITIONS.find((e) => e.id === targetId);
-      if (foundEd && (syscall.op === 'AESTHETIC' || foundEd.id !== currentEdition.id)) {
-        activeEdition = foundEd;
-        changedAesthetic = foundEd;
-        onEditionChange(foundEd);
-        this.applyAestheticToCanvas(editor, foundEd);
-        if (syscall.op === 'AESTHETIC') {
-          return {
-            summary: `${foundEd.catalogueNumber} · ${foundEd.title}`,
-            opcode: rawOpcodeLine,
-            changedAesthetic: foundEd,
-          };
+    const summaries: string[] = [];
+    let harmonizeGoal: string | undefined;
+    let ideateTarget: IdeateEnrichmentTarget | undefined;
+    const newlyCreatedIds: TLShapeId[] = [];
+
+    editor.markHistoryStoppingPoint(`voice-commit-${res.utteranceId}`);
+
+    editor.run(() => {
+      this.clearSpeculativeShapes(editor);
+
+      // Check embedded aesthetic shift alongside creation/styling commands
+      const explicitThemeOp = batch.find((op) => op.op === 'AESTHETIC') as
+        | Extract<CanvasSyscall, { op: 'AESTHETIC' }>
+        | undefined;
+      if (explicitThemeOp || res.aestheticScore >= 0.75) {
+        const targetId = explicitThemeOp
+          ? (explicitThemeOp.aestheticId ?? res.aestheticId)
+          : res.aestheticId;
+        const foundEd = AESTHETIC_EDITIONS.find((e) => e.id === targetId);
+        if (foundEd && (explicitThemeOp || foundEd.id !== currentEdition.id)) {
+          activeEdition = foundEd;
+          changedAesthetic = foundEd;
+          onEditionChange(foundEd);
+          this.applyAestheticToCanvas(editor, foundEd);
+          summaries.push(`${foundEd.catalogueNumber} · ${foundEd.title}`);
         }
       }
+
+      for (const syscall of batch) {
+        if (syscall.op === 'NOOP' || syscall.op === 'AESTHETIC') continue;
+        const stepRes = this.executeOneSyscall(
+          editor,
+          syscall,
+          res,
+          slots,
+          activeEdition,
+          newlyCreatedIds,
+        );
+        if (stepRes?.summary) summaries.push(stepRes.summary);
+        if (stepRes?.requestHarmonizeGoal) harmonizeGoal = stepRes.requestHarmonizeGoal;
+        if (stepRes?.ideateTarget) ideateTarget = stepRes.ideateTarget;
+      }
+    });
+
+    if (newlyCreatedIds.length > 0) {
+      this.frameIfOutsideViewport(editor, newlyCreatedIds);
     }
 
+    if (summaries.length === 0 && !harmonizeGoal) return null;
+
+    return {
+      summary: summaries.join(' · ') || 'Updated canvas',
+      opcode: rawOpcodeLine,
+      changedAesthetic,
+      requestHarmonizeGoal: harmonizeGoal,
+      ideateTarget,
+    };
+  }
+
+  private executeOneSyscall(
+    editor: Editor,
+    syscall: CanvasSyscall,
+    res: SemanticResolution,
+    slots: ParsedSlots,
+    activeEdition: AestheticEdition,
+    newlyCreatedIds: TLShapeId[],
+  ): DirectorResult | null {
     switch (syscall.op) {
       case 'LAYOUT': {
-        const kind = syscall.kind ?? res.blueprintId;
-        editor.markHistoryStoppingPoint('voice-compose');
-        const ids = this.renderBlueprint(editor, kind, res, slots, activeEdition, false);
-        this.lastCreatedIds = ids;
-        this.gentlyFrameShapes(editor, ids);
-        return { summary: `Composed ${kind}`, opcode: rawOpcodeLine, changedAesthetic };
+        const kind = syscall.kind ?? slots.explicitBlueprintId ?? res.blueprintId;
+        const out = this.renderBlueprint(editor, kind, res, slots, activeEdition, false, {
+          topic: syscall.topic,
+          listLabels: syscall.listLabels,
+          anchor: syscall.anchor,
+          color: syscall.color,
+        });
+        this.lastCreatedIds = out.ids;
+        newlyCreatedIds.push(...out.ids);
+        return {
+          summary: `Composed ${kind.replace('_', ' ')}`,
+          ideateTarget: out.ideateTarget,
+        };
       }
 
       case 'SPAWN': {
-        editor.markHistoryStoppingPoint('voice-create');
         const mergedSlots: ParsedSlots = {
           ...slots,
           count: syscall.count ?? slots.count,
-          anchor: syscall.anchor ?? slots.anchor,
+          anchor: syscall.anchor !== undefined ? syscall.anchor : slots.anchor,
         };
-        const ids = this.renderCreateShapes(editor, res, mergedSlots, activeEdition, false);
+        const ids = this.renderCreateShapes(editor, res, mergedSlots, activeEdition, false, {
+          archetypeId: syscall.archetypeId,
+          color: syscall.color,
+          label: syscall.label,
+          listLabels: syscall.listLabels,
+          arrangement: syscall.arrangement,
+          connectCreated: syscall.connectCreated,
+          sizeOverride: syscall.sizeOverride,
+        });
         this.lastCreatedIds = ids;
-        if (ids.length >= 3) this.gentlyFrameShapes(editor, ids);
+        newlyCreatedIds.push(...ids);
         return {
-          summary: `Placed ${ids.length} element${ids.length > 1 ? 's' : ''}`,
-          opcode: rawOpcodeLine,
-          changedAesthetic,
+          summary:
+            ids.length === 1 && syscall.label
+              ? `Added ${syscall.label}`
+              : `Placed ${ids.length} element${ids.length > 1 ? 's' : ''}`,
         };
       }
 
@@ -1015,8 +1891,7 @@ export class CanvasDirector {
         const targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
           (s) => !s.meta?.locked,
         );
-        if (targets.length === 0) return { summary: 'Shape is locked', opcode: rawOpcodeLine };
-        editor.markHistoryStoppingPoint('voice-move');
+        if (targets.length === 0) return { summary: 'Shape is locked' };
 
         if (syscall.anchor || syscall.dir === 'center') {
           const anchor = syscall.anchor ?? 'center';
@@ -1035,7 +1910,7 @@ export class CanvasDirector {
               };
             }),
           );
-          return { summary: `Moved to ${anchor}`, opcode: rawOpcodeLine };
+          return { summary: `Moved to ${anchor}` };
         }
 
         const step =
@@ -1046,20 +1921,21 @@ export class CanvasDirector {
           targets.map((s) => s.id),
           { x: dx, y: dy },
         );
-        return { summary: `Moved ${syscall.dir ?? 'right'}`, opcode: rawOpcodeLine };
+        return { summary: `Moved ${syscall.dir ?? 'right'}` };
       }
 
       case 'PLACE': {
-        const targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
-          (s) => !s.meta?.locked,
-        );
-        const refShape = this.findShapeByReg(editor, syscall.refReg);
+        const targets = this.resolveShapesFromRegs(
+          editor,
+          syscall.targets,
+          syscall.targetLabelHint,
+        ).filter((s) => !s.meta?.locked);
+        const refShape = this.findShapeByReg(editor, syscall.refReg, syscall.refLabelHint);
         if (targets.length === 0 || !refShape) return null;
 
         const refBounds = editor.getShapePageBounds(refShape.id);
         if (!refBounds) return null;
 
-        editor.markHistoryStoppingPoint('voice-place');
         const margin = 46;
         editor.updateShapes(
           targets.map((s) => {
@@ -1081,7 +1957,7 @@ export class CanvasDirector {
             return { id: s.id, type: s.type, x: cx - w / 2, y: cy - h / 2 };
           }),
         );
-        return { summary: `Placed ${syscall.relation.replace('-', ' ')}`, opcode: rawOpcodeLine };
+        return { summary: `Placed ${syscall.relation.replace('-', ' ')}` };
       }
 
       case 'SWAP': {
@@ -1093,7 +1969,6 @@ export class CanvasDirector {
         const bB = editor.getShapePageBounds(shapeB.id);
         if (!bA || !bB) return null;
 
-        editor.markHistoryStoppingPoint('voice-swap');
         editor.updateShapes([
           {
             id: shapeA.id,
@@ -1108,29 +1983,46 @@ export class CanvasDirector {
             y: bA.midY - bB.h / 2,
           },
         ]);
-        return { summary: 'Swapped positions', opcode: rawOpcodeLine };
+        return { summary: 'Swapped positions' };
       }
 
       case 'ANIM': {
-        const targets = this.resolveShapesFromRegs(editor, syscall.targets);
+        const targets = this.resolveShapesFromRegs(
+          editor,
+          syscall.targets,
+          syscall.targetLabelHint,
+        );
         if (targets.length === 0) return null;
-        const anchorShape = this.findShapeByReg(editor, syscall.aroundReg);
+        const anchorShape = this.findShapeByReg(
+          editor,
+          syscall.aroundReg,
+          syscall.aroundLabelHint,
+        );
+        // Never orbit a shape around itself!
+        const filteredTargets =
+          anchorShape && targets.length > 1
+            ? targets.filter((t) => t.id !== anchorShape.id)
+            : targets;
+        const validAnchor =
+          anchorShape && filteredTargets.every((t) => t.id !== anchorShape.id)
+            ? anchorShape
+            : null;
+
         const applied = this.animations.setAnimation(
-          targets.map((s) => s.id),
+          filteredTargets.map((s) => s.id),
           {
             kind: syscall.kind,
             speed: syscall.speed ?? 1,
             intensity: syscall.intensity ?? 1,
-            anchorShapeId: anchorShape?.id ?? null,
+            anchorShapeId: validAnchor?.id ?? null,
             direction: syscall.direction,
           },
         );
         if (applied === 0) return null;
         return {
-          summary: anchorShape
-            ? `Animating ${syscall.kind} around ${syscall.aroundReg}`
+          summary: validAnchor
+            ? `Orbiting around ${this.getPlainShapeLabel(validAnchor) || syscall.aroundReg || 'hub'}`
             : `Animating · ${syscall.kind}`,
-          opcode: rawOpcodeLine,
         };
       }
 
@@ -1147,7 +2039,6 @@ export class CanvasDirector {
             : syscall.multiplier > 1
               ? 'Accelerated motion'
               : 'Gentle tempo',
-          opcode: rawOpcodeLine,
         };
       }
 
@@ -1157,29 +2048,74 @@ export class CanvasDirector {
           ? ('all' as const)
           : this.resolveShapesFromRegs(editor, syscall.targets).map((s) => s.id);
         this.animations.stopAnimation(ids);
-        return { summary: 'Motion stilled', opcode: rawOpcodeLine };
+        return { summary: 'Motion stilled' };
       }
 
       case 'HARMONIZE': {
         return {
           summary: 'Curating composition…',
-          opcode: rawOpcodeLine,
           requestHarmonizeGoal: syscall.goalPrompt ?? res.rawText,
         };
       }
 
       case 'CONNECT': {
-        const allNodes = editor
-          .getCurrentPageShapes()
-          .filter((s) => !s.meta?.speculative && s.type !== 'arrow');
+        const { cx, cy, isPortrait } = this.getViewportAnchorPoint(editor, null, true, 480, 180);
 
-        editor.markHistoryStoppingPoint('voice-connect');
-        const { cx, cy, isPortrait } = this.getViewportAnchorPoint(editor, null, true);
+        // Multi-hop chain pipeline: "connect Client to Gateway to Auth to Postgres"
+        if (syscall.chainLabels && syscall.chainLabels.length >= 2) {
+          const chain = syscall.chainLabels;
+          const chainIds: TLShapeId[] = [];
+          const stepX = isPortrait ? 0 : activeEdition.tokens.gapX;
+          const stepY = isPortrait ? activeEdition.tokens.gapY : 0;
+
+          chain.forEach((lbl, idx) => {
+            const existing = this.findShapeByLabelHint(editor, lbl);
+            if (existing) {
+              chainIds.push(existing.id);
+            } else {
+              const arch = this.inferArchetypeForLabel(lbl);
+              const nx = cx + (idx - (chain.length - 1) / 2) * stepX;
+              const ny = cy + (idx - (chain.length - 1) / 2) * stepY;
+              const nid = this.spawnNode(editor, {
+                x: nx,
+                y: ny,
+                w: arch.w,
+                h: arch.h,
+                shapeType: arch.shapeType,
+                geo: arch.geo,
+                label: lbl,
+                role: idx === chain.length - 1 ? 'accent' : arch.role,
+                colorOverride: null,
+                slots,
+                edition: activeEdition,
+                speculative: false,
+                utteranceId: res.utteranceId,
+              });
+              chainIds.push(nid);
+              newlyCreatedIds.push(nid);
+            }
+          });
+
+          for (let i = 0; i < chainIds.length - 1; i++) {
+            if (chainIds[i] !== chainIds[i + 1]) {
+              this.createBoundArrow(
+                editor,
+                chainIds[i],
+                chainIds[i + 1],
+                activeEdition,
+                false,
+                res.utteranceId,
+                syscall.edgeLabel,
+              );
+            }
+          }
+          this.lastCreatedIds = chainIds;
+          return { summary: `Linked ${chain.join(' → ')}` };
+        }
 
         if (!syscall.all && (syscall.fromReg || syscall.toReg || syscall.fromLabel || syscall.toLabel)) {
-          let fromS = this.findShapeByReg(editor, syscall.fromReg);
-          let toS = this.findShapeByReg(editor, syscall.toReg);
-          const spawnedIds: TLShapeId[] = [];
+          let fromS = this.findShapeByReg(editor, syscall.fromReg, syscall.fromLabel);
+          let toS = this.findShapeByReg(editor, syscall.toReg, syscall.toLabel);
 
           if (!fromS && syscall.fromLabel) {
             const arch = this.inferArchetypeForLabel(syscall.fromLabel);
@@ -1204,7 +2140,7 @@ export class CanvasDirector {
               speculative: false,
               utteranceId: res.utteranceId,
             });
-            spawnedIds.push(newId);
+            newlyCreatedIds.push(newId);
             fromS = editor.getShape(newId) ?? null;
           }
 
@@ -1232,7 +2168,7 @@ export class CanvasDirector {
               speculative: false,
               utteranceId: res.utteranceId,
             });
-            spawnedIds.push(newId);
+            newlyCreatedIds.push(newId);
             toS = editor.getShape(newId) ?? null;
           }
 
@@ -1246,21 +2182,20 @@ export class CanvasDirector {
               res.utteranceId,
               syscall.edgeLabel,
             );
-            if (spawnedIds.length > 0) {
-              this.lastCreatedIds = [fromS.id, toS.id];
-              this.gentlyFrameShapes(editor, [fromS.id, toS.id]);
-            }
-            const srcTag = syscall.fromLabel ?? syscall.fromReg ?? 'node';
-            const dstTag = syscall.toLabel ?? syscall.toReg ?? 'node';
+            this.lastCreatedIds = [fromS.id, toS.id];
+            const srcTag = syscall.fromLabel ?? this.getPlainShapeLabel(fromS) ?? syscall.fromReg ?? 'node';
+            const dstTag = syscall.toLabel ?? this.getPlainShapeLabel(toS) ?? syscall.toReg ?? 'node';
             return {
               summary: syscall.edgeLabel
                 ? `Linked ${srcTag} → ${dstTag} (${syscall.edgeLabel})`
                 : `Connected ${srcTag} → ${dstTag}`,
-              opcode: rawOpcodeLine,
             };
           }
         }
 
+        const allNodes = editor
+          .getCurrentPageShapes()
+          .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && s.type !== 'frame');
         if (allNodes.length < 2) return null;
 
         const targets =
@@ -1281,25 +2216,23 @@ export class CanvasDirector {
             syscall.edgeLabel,
           );
         }
-        return { summary: `Connected ${targets.length} elements`, opcode: rawOpcodeLine };
+        return { summary: `Connected ${targets.length} elements` };
       }
 
       case 'STYLE_COLOR': {
         const color = syscall.color ?? res.color ?? activeEdition.tokens.accentColor;
         const targets = this.resolveShapesFromRegs(editor, syscall.targets);
         if (targets.length === 0) return null;
-        editor.markHistoryStoppingPoint('voice-color');
         editor.updateShapes(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           targets.map((s) => ({ id: s.id, type: s.type, props: { color } })) as any,
         );
-        return { summary: `Tinted ${color}`, opcode: rawOpcodeLine };
+        return { summary: `Tinted ${color}` };
       }
 
       case 'STYLE_SURFACE': {
         const targets = this.resolveShapesFromRegs(editor, syscall.targets);
         if (targets.length === 0) return null;
-        editor.markHistoryStoppingPoint('voice-style');
         editor.updateShapes(
           targets.map((s) => {
             const props: Record<string, unknown> = {};
@@ -1308,18 +2241,59 @@ export class CanvasDirector {
             if (slots.fontOverride && (s.type === 'geo' || s.type === 'note' || s.type === 'text')) {
               props.font = slots.fontOverride;
             }
+            const sz = syscall.sizeOverride ?? slots.sizeOverride;
+            if (sz && (s.type === 'geo' || s.type === 'note' || s.type === 'text')) {
+              props.size = sz;
+            }
             return { id: s.id, type: s.type, props };
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           }) as any,
         );
-        return { summary: 'Updated surface treatment', opcode: rawOpcodeLine };
+        return { summary: 'Updated surface treatment' };
+      }
+
+      case 'STYLE_ARROWS': {
+        const arrows = editor
+          .getCurrentPageShapes()
+          .filter((s) => !s.meta?.speculative && s.type === 'arrow');
+        if (arrows.length === 0) return null;
+
+        editor.updateShapes(
+          arrows.map((s) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const p = s.props as any;
+            const props: Record<string, unknown> = {};
+            if (syscall.kind === 'arc') {
+              props.kind = 'arc';
+              props.bend = activeEdition.tokens.arrowBend || 28;
+            } else if (syscall.kind === 'elbow') {
+              props.kind = 'elbow';
+              props.bend = 0;
+            }
+            if (syscall.dash) {
+              props.dash = syscall.dash;
+            }
+            if (syscall.reverse) {
+              const prevStart = p?.arrowheadStart ?? 'none';
+              const prevEnd = p?.arrowheadEnd ?? activeEdition.tokens.arrowheadEnd;
+              props.arrowheadStart = prevEnd === 'none' ? activeEdition.tokens.arrowheadEnd : prevEnd;
+              props.arrowheadEnd = prevStart === prevEnd ? 'none' : prevStart;
+            }
+            return { id: s.id, type: 'arrow' as const, props };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          }) as any,
+        );
+        return {
+          summary: syscall.reverse
+            ? 'Reversed connectors'
+            : `Styled connectors (${syscall.kind ?? syscall.dash ?? 'updated'})`,
+        };
       }
 
       case 'SCALE': {
         const targets = this.resolveShapesFromRegs(editor, syscall.targets);
         if (targets.length === 0) return null;
         const factor = syscall.factor;
-        editor.markHistoryStoppingPoint('voice-scale');
         editor.updateShapes(
           targets.map((s) => {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1342,16 +2316,166 @@ export class CanvasDirector {
         );
         return {
           summary: factor > 1 ? 'Enlarged proportion' : 'Reduced proportion',
-          opcode: rawOpcodeLine,
         };
+      }
+
+      case 'ROTATE': {
+        const targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => !s.meta?.locked,
+        );
+        if (targets.length === 0) return null;
+        const rad = (syscall.degrees * Math.PI) / 180;
+        editor.updateShapes(
+          targets.map((s) => ({
+            id: s.id,
+            type: s.type,
+            rotation: syscall.absolute ? rad : (s.rotation || 0) + rad,
+          })),
+        );
+        return {
+          summary: syscall.absolute && syscall.degrees === 0 ? 'Straightened angle' : `Rotated ${syscall.degrees}°`,
+        };
+      }
+
+      case 'ALIGN': {
+        let targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => !s.meta?.locked && s.type !== 'frame',
+        );
+        if (targets.length < 2) {
+          targets = editor
+            .getCurrentPageShapes()
+            .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && s.type !== 'frame' && !s.meta?.locked);
+        }
+        if (targets.length < 2) return null;
+
+        const withBounds = targets
+          .map((s) => ({ s, b: editor.getShapePageBounds(s.id) }))
+          .filter((item): item is { s: TLShape; b: NonNullable<ReturnType<Editor['getShapePageBounds']>> } =>
+            Boolean(item.b),
+          );
+        if (withBounds.length < 2) return null;
+
+        const minX = Math.min(...withBounds.map((i) => i.b.minX));
+        const maxX = Math.max(...withBounds.map((i) => i.b.maxX));
+        const minY = Math.min(...withBounds.map((i) => i.b.minY));
+        const maxY = Math.max(...withBounds.map((i) => i.b.maxY));
+        const midX = (minX + maxX) / 2;
+        const midY = (minY + maxY) / 2;
+
+        if (syscall.mode === 'distribute-horizontal') {
+          const sorted = withBounds.slice().sort((a, b) => a.b.midX - b.b.midX);
+          const span = sorted[sorted.length - 1].b.midX - sorted[0].b.midX;
+          const step = sorted.length > 1 ? Math.max(180, span / (sorted.length - 1)) : 0;
+          const startX = sorted[0].b.midX;
+          editor.updateShapes(
+            sorted.map(({ s, b }, idx) => ({
+              id: s.id,
+              type: s.type,
+              x: startX + idx * step - b.w / 2,
+            })),
+          );
+        } else if (syscall.mode === 'distribute-vertical') {
+          const sorted = withBounds.slice().sort((a, b) => a.b.midY - b.b.midY);
+          const span = sorted[sorted.length - 1].b.midY - sorted[0].b.midY;
+          const step = sorted.length > 1 ? Math.max(125, span / (sorted.length - 1)) : 0;
+          const startY = sorted[0].b.midY;
+          editor.updateShapes(
+            sorted.map(({ s, b }, idx) => ({
+              id: s.id,
+              type: s.type,
+              y: startY + idx * step - b.h / 2,
+            })),
+          );
+        } else {
+          editor.updateShapes(
+            withBounds.map(({ s, b }) => {
+              let x = s.x;
+              let y = s.y;
+              if (syscall.mode === 'left') x = minX;
+              else if (syscall.mode === 'right') x = maxX - b.w;
+              else if (syscall.mode === 'center-horizontal') x = midX - b.w / 2;
+              else if (syscall.mode === 'top') y = minY;
+              else if (syscall.mode === 'bottom') y = maxY - b.h;
+              else if (syscall.mode === 'center-vertical') y = midY - b.h / 2;
+              return { id: s.id, type: s.type, x, y };
+            }),
+          );
+        }
+        return { summary: `Aligned (${syscall.mode.replace('-', ' ')})` };
+      }
+
+      case 'FRAME_GROUP': {
+        let targets: TLShape[] = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => s.type !== 'frame',
+        );
+        if (targets.length === 0) {
+          targets = editor
+            .getCurrentPageShapes()
+            .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && s.type !== 'frame');
+        }
+        const boundsList = targets
+          .map((s) => editor.getShapePageBounds(s.id))
+          .filter((b): b is NonNullable<typeof b> => Boolean(b));
+
+        let fx: number;
+        let fy: number;
+        let fw: number;
+        let fh: number;
+
+        if (boundsList.length > 0) {
+          const minX = Math.min(...boundsList.map((b) => b.minX)) - 48;
+          const maxX = Math.max(...boundsList.map((b) => b.maxX)) + 48;
+          const minY = Math.min(...boundsList.map((b) => b.minY)) - 60;
+          const maxY = Math.max(...boundsList.map((b) => b.maxY)) + 48;
+          fw = Math.max(280, maxX - minX);
+          fh = Math.max(200, maxY - minY);
+          fx = minX + fw / 2;
+          fy = minY + fh / 2;
+        } else {
+          const pt = this.getViewportAnchorPoint(editor, null, true, 460, 300);
+          fx = pt.cx;
+          fy = pt.cy;
+          fw = 460;
+          fh = 300;
+        }
+
+        const label = syscall.label || slots.frameGroupLabel || activeEdition.title;
+        const frameId = this.spawnNode(editor, {
+          x: fx,
+          y: fy,
+          w: fw,
+          h: fh,
+          shapeType: 'frame',
+          label,
+          role: 'muted',
+          colorOverride: null,
+          slots,
+          edition: activeEdition,
+          speculative: false,
+          utteranceId: res.utteranceId,
+        });
+        editor.sendToBack([frameId]);
+        newlyCreatedIds.push(frameId);
+        return { summary: `Framed "${label}"` };
+      }
+
+      case 'Z_ORDER': {
+        const targets = this.resolveShapesFromRegs(editor, syscall.targets);
+        if (targets.length === 0) return null;
+        const ids = targets.map((s) => s.id);
+        if (syscall.order === 'front') {
+          editor.bringToFront(ids);
+          return { summary: 'Brought to front' };
+        }
+        editor.sendToBack(ids);
+        return { summary: 'Sent to back' };
       }
 
       case 'ARRANGE': {
         const all = editor
           .getCurrentPageShapes()
-          .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && !s.meta?.locked);
+          .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && s.type !== 'frame' && !s.meta?.locked);
         if (all.length < 2) return null;
-        editor.markHistoryStoppingPoint('voice-arrange');
         const { cx, cy, isPortrait } = this.getViewportAnchorPoint(editor, null, false);
         const mode = syscall.mode ?? (isPortrait ? 'column' : 'row');
         const gapX = activeEdition.tokens.gapX;
@@ -1368,6 +2492,16 @@ export class CanvasDirector {
               x = cx + (i - (all.length - 1) / 2) * gapX;
             } else if (mode === 'column') {
               y = cy + (i - (all.length - 1) / 2) * gapY;
+            } else if (mode === 'circle') {
+              const radius = Math.max(155, all.length * 38);
+              const angle = (i / all.length) * Math.PI * 2 - Math.PI / 2;
+              x = cx + Math.cos(angle) * radius;
+              y = cy + Math.sin(angle) * radius * 0.85;
+            } else if (mode === 'scatter') {
+              const golden = i * 2.3999632;
+              const r = i === 0 ? 0 : 125 * Math.sqrt(i);
+              x = cx + Math.cos(golden) * r;
+              y = cy + Math.sin(golden) * r * 0.82;
             } else {
               const cols = Math.ceil(Math.sqrt(all.length));
               const rows = Math.ceil(all.length / cols);
@@ -1378,25 +2512,24 @@ export class CanvasDirector {
           }),
         );
         this.gentlyFrameShapes(editor, all.map((s) => s.id));
-        return { summary: `Arranged in ${mode}`, opcode: rawOpcodeLine };
+        return { summary: `Arranged in ${mode}` };
       }
 
       case 'DUPLICATE': {
         const targets = this.resolveShapesFromRegs(editor, syscall.targets);
         if (targets.length === 0) return null;
-        editor.markHistoryStoppingPoint('voice-duplicate');
-        editor.duplicateShapes(
-          targets.map((s) => s.id),
-          { x: 48, y: 48 },
-        );
-        return { summary: 'Duplicated study', opcode: rawOpcodeLine };
+        const copies = Math.min(12, Math.max(1, syscall.count ?? 1));
+        const ids = targets.map((s) => s.id);
+        for (let c = 1; c <= copies; c++) {
+          editor.duplicateShapes(ids, { x: 44 * c, y: 44 * c });
+        }
+        return { summary: copies > 1 ? `Duplicated ×${copies}` : 'Duplicated study' };
       }
 
       case 'LABEL': {
         const targets = this.resolveShapesFromRegs(editor, syscall.targets);
         const label = syscall.text ?? slots.singleLabel;
         if (targets.length === 0 || !label) return null;
-        editor.markHistoryStoppingPoint('voice-label');
         const target = targets[0];
         if (target.type === 'frame') {
           editor.updateShape({ id: target.id, type: 'frame', props: { name: label } });
@@ -1407,7 +2540,7 @@ export class CanvasDirector {
             props: { richText: toRichText(label) },
           });
         }
-        return { summary: `Inscribed "${label}"`, opcode: rawOpcodeLine };
+        return { summary: `Inscribed "${label}"` };
       }
 
       case 'LOCK': {
@@ -1422,7 +2555,6 @@ export class CanvasDirector {
         );
         return {
           summary: syscall.locked ? 'Pinned in place' : 'Unpinned shape',
-          opcode: rawOpcodeLine,
         };
       }
 
@@ -1430,7 +2562,7 @@ export class CanvasDirector {
         const targets = this.resolveShapesFromRegs(editor, syscall.targets);
         if (targets.length > 0) {
           editor.setSelectedShapes(targets.map((s) => s.id));
-          return { summary: `Selected ${targets.length}`, opcode: rawOpcodeLine };
+          return { summary: `Selected ${targets.length}` };
         }
         return null;
       }
@@ -1444,16 +2576,14 @@ export class CanvasDirector {
           (s) => !s.meta?.locked,
         );
         if (targets.length === 0) {
-          return { summary: 'Protected (locked)', opcode: rawOpcodeLine };
+          return { summary: 'Protected (locked)' };
         }
         const ids = targets.map((s) => s.id);
         this.animations.stopAnimation(ids);
-        editor.markHistoryStoppingPoint('voice-delete');
         editor.deleteShapes(ids);
         this.lastCreatedIds = this.lastCreatedIds.filter((id) => !ids.includes(id));
         return {
           summary: `Removed ${ids.length} element${ids.length > 1 ? 's' : ''}`,
-          opcode: rawOpcodeLine,
         };
       }
 
@@ -1466,12 +2596,11 @@ export class CanvasDirector {
           .getCurrentPageShapes()
           .filter((s) => unlockForce || !s.meta?.locked)
           .map((s) => s.id);
-        if (removable.length === 0) return { summary: 'Canvas clear', opcode: rawOpcodeLine };
+        if (removable.length === 0) return { summary: 'Canvas clear' };
         this.animations.stopAnimation(removable);
-        editor.markHistoryStoppingPoint('voice-clear');
         editor.deleteShapes(removable);
         this.lastCreatedIds = [];
-        return { summary: 'Cleared canvas', opcode: rawOpcodeLine };
+        return { summary: 'Cleared canvas' };
       }
 
       case 'UNDO': {
@@ -1480,29 +2609,57 @@ export class CanvasDirector {
         }
         editor.undo();
         this.animations.pruneDeletedShapes();
-        return { summary: 'Undid step', opcode: rawOpcodeLine };
+        return { summary: 'Undid step' };
       }
 
       case 'REDO': {
         editor.redo();
-        return { summary: 'Redid step', opcode: rawOpcodeLine };
+        return { summary: 'Redid step' };
       }
 
       case 'CAMERA': {
         if (syscall.action === 'zoom_in') {
-          editor.zoomIn(editor.getViewportScreenCenter(), { animation: { duration: 280 } });
-          return { summary: 'Zoomed in', opcode: rawOpcodeLine };
+          editor.zoomIn(editor.getViewportScreenCenter(), { animation: { duration: 220 } });
+          return { summary: 'Zoomed in' };
         }
         if (syscall.action === 'zoom_out') {
-          editor.zoomOut(editor.getViewportScreenCenter(), { animation: { duration: 280 } });
-          return { summary: 'Zoomed out', opcode: rawOpcodeLine };
+          editor.zoomOut(editor.getViewportScreenCenter(), { animation: { duration: 220 } });
+          return { summary: 'Zoomed out' };
         }
-        editor.zoomToFit({ animation: { duration: 360 } });
-        return { summary: 'Framed composition', opcode: rawOpcodeLine };
+        editor.zoomToFit({ animation: { duration: 300 } });
+        return { summary: 'Framed composition' };
       }
 
       default:
         return null;
+    }
+  }
+
+  /**
+   * Non-intrusive smart camera framing: never hijacks viewport during rapid-fire edits unless
+   * newly created geometry actually extends beyond the visible viewport!
+   */
+  private frameIfOutsideViewport(editor: Editor, ids: TLShapeId[]): void {
+    if (ids.length === 0) return;
+    editor.selectNone();
+    const vp = editor.getViewportPageBounds();
+    const margin = 24;
+    let outside = false;
+    for (const id of ids) {
+      const b = editor.getShapePageBounds(id);
+      if (!b) continue;
+      if (
+        b.minX < vp.minX + margin ||
+        b.maxX > vp.maxX - margin ||
+        b.minY < vp.minY + margin ||
+        b.maxY > vp.maxY - margin
+      ) {
+        outside = true;
+        break;
+      }
+    }
+    if (outside) {
+      editor.zoomToFit({ animation: { duration: 180 } });
     }
   }
 
@@ -1511,7 +2668,7 @@ export class CanvasDirector {
     editor.selectNone();
     const shapes = editor.getCurrentPageShapes().filter((s) => !s.meta?.speculative);
     if (shapes.length >= 2) {
-      editor.zoomToFit({ animation: { duration: 380 } });
+      editor.zoomToFit({ animation: { duration: 300 } });
     }
   }
 }

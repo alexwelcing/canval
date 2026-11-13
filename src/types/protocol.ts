@@ -3,7 +3,7 @@ import type {
   CatalogAnimationKind,
   IntentKind,
 } from '../design/catalog';
-import type { TLDefaultColorStyle } from 'tldraw';
+import type { TLDefaultColorStyle, TLDefaultDashStyle, TLDefaultSizeStyle } from 'tldraw';
 
 export type WordWithConfidence = [word: string, confidence: number];
 
@@ -94,7 +94,7 @@ export type GemmaWorkerOut =
   | { type: 'resolved'; payload: SemanticResolution }
   | { type: 'error'; message: string };
 
-// ---------------- Model 3: Qwen Canvas State Computer Protocol ----------------
+// ---------------- Model 3: Superscalar + Qwen Canvas State Computer Protocol ----------------
 
 export interface CanvasRegisterSnapshot {
   shapes: CanvasShapeSummary[];
@@ -116,10 +116,40 @@ export type SpatialAnchor =
 
 export type SpatialRelation = 'above' | 'below' | 'left-of' | 'right-of' | 'near';
 
+export type ArrangementMode = 'row' | 'column' | 'grid' | 'circle' | 'scatter';
+
+export type AlignDistributeMode =
+  | 'left'
+  | 'right'
+  | 'top'
+  | 'bottom'
+  | 'center-horizontal'
+  | 'center-vertical'
+  | 'distribute-horizontal'
+  | 'distribute-vertical';
+
 export type CanvasSyscall =
   | { op: 'NOOP'; reason: string }
-  | { op: 'SPAWN'; count?: number; anchor?: SpatialAnchor | null }
-  | { op: 'LAYOUT'; kind?: BlueprintKind }
+  | {
+      op: 'SPAWN';
+      count?: number;
+      anchor?: SpatialAnchor | null;
+      archetypeId?: string | null;
+      color?: TLDefaultColorStyle | null;
+      label?: string | null;
+      listLabels?: string[];
+      arrangement?: ArrangementMode | null;
+      connectCreated?: boolean;
+      sizeOverride?: TLDefaultSizeStyle | null;
+    }
+  | {
+      op: 'LAYOUT';
+      kind?: BlueprintKind;
+      topic?: string | null;
+      listLabels?: string[];
+      anchor?: SpatialAnchor | null;
+      color?: TLDefaultColorStyle | null;
+    }
   | {
       op: 'MOVE';
       targets: string[]; // shape regs ("s1") or "ALL" or "FOCUS"
@@ -131,7 +161,9 @@ export type CanvasSyscall =
       op: 'PLACE';
       targets: string[];
       relation: SpatialRelation;
-      refReg: string;
+      refReg?: string | null;
+      targetLabelHint?: string | null;
+      refLabelHint?: string | null;
     }
   | {
       op: 'SWAP';
@@ -143,6 +175,8 @@ export type CanvasSyscall =
       targets: string[];
       kind: Exclude<CatalogAnimationKind, 'stop'>;
       aroundReg?: string | null;
+      aroundLabelHint?: string | null;
+      targetLabelHint?: string | null;
       speed?: number;
       intensity?: number;
       direction?: 'cw' | 'ccw' | 'horizontal' | 'vertical';
@@ -164,13 +198,24 @@ export type CanvasSyscall =
       fromLabel?: string | null;
       toLabel?: string | null;
       edgeLabel?: string | null;
+      chainLabels?: string[];
       all?: boolean;
     }
   | { op: 'STYLE_COLOR'; targets: string[]; color?: TLDefaultColorStyle | null }
-  | { op: 'STYLE_SURFACE'; targets: string[] }
+  | { op: 'STYLE_SURFACE'; targets: string[]; sizeOverride?: TLDefaultSizeStyle | null }
+  | {
+      op: 'STYLE_ARROWS';
+      kind?: 'arc' | 'elbow' | null;
+      dash?: TLDefaultDashStyle | null;
+      reverse?: boolean;
+    }
   | { op: 'SCALE'; targets: string[]; factor: number }
-  | { op: 'ARRANGE'; mode?: 'row' | 'column' | 'grid' | null }
-  | { op: 'DUPLICATE'; targets: string[] }
+  | { op: 'ROTATE'; targets: string[]; degrees: number; absolute?: boolean }
+  | { op: 'ARRANGE'; mode?: ArrangementMode | null }
+  | { op: 'ALIGN'; targets: string[]; mode: AlignDistributeMode }
+  | { op: 'FRAME_GROUP'; targets: string[]; label?: string | null }
+  | { op: 'Z_ORDER'; targets: string[]; order: 'front' | 'back' }
+  | { op: 'DUPLICATE'; targets: string[]; count?: number }
   | { op: 'LABEL'; targets: string[]; text?: string | null }
   | { op: 'LOCK'; targets: string[]; locked: boolean }
   | { op: 'SELECT'; targets: string[] }
@@ -199,6 +244,8 @@ export interface StateComputerDecision {
   utteranceId: number;
   rawOpcodeLine: string;
   syscall: CanvasSyscall;
+  /** Ordered compound batch of syscalls when a single utterance contains multiple clauses/steps */
+  syscalls?: CanvasSyscall[];
   resolution: SemanticResolution;
   engineSource: 'qwen-webgpu' | 'qwen-edge' | 'register-alu';
   computeMs: number;

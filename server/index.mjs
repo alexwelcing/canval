@@ -159,6 +159,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (p === '/api/voice/ideate' && req.method === 'POST') {
+      await bootPromise;
+      const body = await readJsonBody(req);
+      const ideation = await studio.ideateTopicNodes(body);
+      sendJson(res, 200, ideation);
+      return;
+    }
+
     if (p === '/api/voice/harmonize' && req.method === 'POST') {
       await bootPromise;
       const body = await readJsonBody(req);
@@ -198,6 +206,39 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
+function extractServerPairHints(rawText) {
+  const clean = String(rawText || '').trim();
+  if (!clean) return { sourceHint: null, targetHint: null };
+  const trimArt = (s) =>
+    s
+      .replace(/^(the|a|an|that|this|my)\s+/i, '')
+      .replace(/\s+(with\s+an?\s+arrow|together|now|please|smoothly|gently)$/i, '')
+      .trim() || null;
+
+  const orbitM = clean.match(
+    /\b(?:orbit|revolve|circle)\s+(.+?)\s+around\s+(.+?)(?:\s+clockwise|\s+counterclockwise|$)/i,
+  );
+  if (orbitM) return { sourceHint: trimArt(orbitM[1]), targetHint: trimArt(orbitM[2]) };
+
+  const makeOrbitM = clean.match(/\bmake\s+(.+?)\s+(?:orbit|revolve|circle)\s+around\s+(.+)$/i);
+  if (makeOrbitM) return { sourceHint: trimArt(makeOrbitM[1]), targetHint: trimArt(makeOrbitM[2]) };
+
+  const placeM = clean.match(
+    /\b(?:put|place|move|position|stack|set)\s+(.+?)\s+(?:right\s+of|left\s+of|to\s+the\s+right\s+of|to\s+the\s+left\s+of|next\s+to|beside|above|over|on\s+top\s+of|below|under|underneath|beneath)\s+(.+)$/i,
+  );
+  if (placeM) return { sourceHint: trimArt(placeM[1]), targetHint: trimArt(placeM[2]) };
+
+  const swapM = clean.match(/\b(?:swap|switch|exchange)\s+(.+?)\s+(?:and|with)\s+(.+)$/i);
+  if (swapM) return { sourceHint: trimArt(swapM[1]), targetHint: trimArt(swapM[2]) };
+
+  const connM = clean.match(
+    /\b(?:connect|link|wire|join|attach|point)\s+(.+?)\s+(?:to|with|into|and|->)\s+(.+)$/i,
+  );
+  if (connM) return { sourceHint: trimArt(connM[1]), targetHint: trimArt(connM[2]) };
+
+  return { sourceHint: null, targetHint: null };
+}
+
 wss.on('connection', async (ws) => {
   activeWsClients++;
   await bootPromise;
@@ -215,12 +256,82 @@ wss.on('connection', async (ws) => {
     return;
   }
 
+  let clientShapes = [];
+  let wsReqSeq = 1;
+  let lastSpecKey = '';
+  let specBusy = false;
+  let pendingSpecJob = null;
+
+  const drainSpeculative = async () => {
+    if (specBusy || !pendingSpecJob || !studio.gemmaReady) return;
+    specBusy = true;
+    try {
+      while (pendingSpecJob) {
+        const job = pendingSpecJob;
+        pendingSpecJob = null;
+        const resolution = await studio.resolveUtterance(job);
+        sendSafe({ type: 'resolved', payload: resolution });
+      }
+    } catch {
+      // ignore transient speculative embedding error
+    } finally {
+      specBusy = false;
+    }
+  };
+
   const session = studio.createAudioSession((update) => {
     sendSafe({ type: 'update', payload: update });
+
+    // Zero-RTT Fused Semantic Resolution pushed directly down the live WebSocket!
+    if (!studio.gemmaReady) return;
+
+    if (update.isFinal) {
+      lastSpecKey = '';
+      pendingSpecJob = null;
+      const { sourceHint, targetHint } = extractServerPairHints(update.text);
+      const reqId = wsReqSeq++;
+      void studio
+        .resolveUtterance({
+          requestId: reqId,
+          utteranceId: update.utteranceId,
+          phase: 'commit',
+          text: update.text,
+          ghostText: '',
+          words: update.words,
+          shapes: clientShapes,
+          sourceHint,
+          targetHint,
+        })
+        .then((resolution) => {
+          sendSafe({ type: 'resolved', payload: resolution });
+        })
+        .catch(() => {});
+    } else {
+      const solidWords = (update.words || []).filter(([, p]) => p >= 0.38).map(([w]) => w);
+      const ghostWords = (update.ghost || []).filter(([, p]) => p >= 0.36).map(([w]) => w);
+      const specText = solidWords.join(' ').trim();
+      const specGhost = ghostWords.join(' ').trim();
+      const specKey = `${update.utteranceId}:${specText}|${specGhost}`.toLowerCase();
+
+      if (solidWords.length >= 2 && specKey !== lastSpecKey) {
+        lastSpecKey = specKey;
+        pendingSpecJob = {
+          requestId: wsReqSeq++,
+          utteranceId: update.utteranceId,
+          phase: 'speculative',
+          text: specText,
+          ghostText: specGhost,
+          words: update.words,
+          shapes: clientShapes,
+        };
+        void drainSpeculative();
+      }
+    }
   });
 
   sendSafe({
     type: 'ready',
+    zeroRttResolve: true,
     status: studio.getStatus(),
   });
 
@@ -238,6 +349,11 @@ wss.on('connection', async (ws) => {
       const msg = JSON.parse(data.toString('utf8'));
       if (msg.type === 'reset') {
         session.resetAll();
+      } else if (msg.type === 'sync_state' && Array.isArray(msg.shapes)) {
+        clientShapes = msg.shapes.slice(0, 80);
+        if (studio.gemmaReady) {
+          void studio.ensureShapeEmbeddings(clientShapes).catch(() => {});
+        }
       } else if (msg.type === 'audio' && typeof msg.pcmBase64 === 'string') {
         const raw = Buffer.from(msg.pcmBase64, 'base64');
         const aligned = new Uint8Array(raw.byteLength);
