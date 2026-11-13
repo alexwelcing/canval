@@ -27,13 +27,13 @@ test('rejects invalid task payload at Zod boundary', async () => {
   expect(res.status).toBe(400)
 })
 
-test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (10 themes, 10 layouts, 21 intents)', async () => {
+test('returns expanded Earlybird and EmbeddingGemma 2 design catalog (11 themes, 10 layouts, 21 intents)', async () => {
   const res = await app.request('/api/voice/catalog')
   expect(res.status).toBe(200)
   const body = (await res.json()) as any
   expect(body.status.earlybird).toBe('sahilmahendrakar/Earlybird-29M')
   expect(body.status.embeddingGemma).toBe('google/embeddinggemma-2')
-  expect(body.themes.length).toBe(10)
+  expect(body.themes.length).toBe(11)
   expect(body.layouts.length).toBe(10)
   expect(body.intents.length).toBe(21)
 })
@@ -55,7 +55,7 @@ test('routes spoken shape creation command with semantic archetype & color', asy
   expect(command.shape.label).toBe('AWS Gateway')
 })
 
-test('routes spoken visual design theme switch including new Bauhaus & Cyberpunk palettes', async () => {
+test('routes spoken visual design theme switch including Watercolor Atelier, Bauhaus & Cyberpunk palettes', async () => {
   const res1 = await app.request('/api/voice/command', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -77,6 +77,17 @@ test('routes spoken visual design theme switch including new Bauhaus & Cyberpunk
   })
   expect(res2.status).toBe(200)
   expect(((await res2.json()) as any).command.theme.id).toBe('bauhaus-geometric')
+
+  const res3 = await app.request('/api/voice/command', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      utterance: 'paint with watercolor atelier palette',
+      canvasShapes: [],
+    }),
+  })
+  expect(res3.status).toBe(200)
+  expect(((await res3.json()) as any).command.theme.id).toBe('watercolor-atelier')
 })
 
 test('routes spoken multi-shape layout generation including RAG and C4 diagrams', async () => {

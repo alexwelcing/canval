@@ -395,7 +395,7 @@ export function routeSingleClauseCommand(
     intentScores.generate_layout += 0.83
   }
   if (
-    /\b(theme|aesthetic|vibe|palette|blueprint|cyberpunk|neon|editorial|sketchbook|nordic|minimalist|botanical|forest|executive|bauhaus|tokyo midnight|solarized|dark mode|light mode)\b/i.test(
+    /\b(theme|aesthetic|vibe|palette|watercolor|aquarelle|blueprint|cyberpunk|neon|editorial|sketchbook|nordic|minimalist|botanical|forest|executive|bauhaus|tokyo midnight|solarized|dark mode|light mode)\b/i.test(
       lower
     ) &&
     !/\b(draw a|add a|create a)\s+(box|node|circle|rectangle|diamond)\b/i.test(lower)

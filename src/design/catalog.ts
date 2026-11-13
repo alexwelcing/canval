@@ -380,6 +380,24 @@ export const COMMAND_INTENTS: CommandIntentSpec[] = [
 
 export const DESIGN_THEMES: DesignThemeSpec[] = [
   {
+    id: 'watercolor-atelier',
+    name: 'Watercolor Atelier',
+    title: 'Hand-Painted Watercolor Atelier on Cold-Press Cotton Paper',
+    description:
+      'Organic hand-painted aquarelle watercolor wash aesthetic on warm cold-press cotton paper with bleeding pigment edges, cerulean blue, viridian green, alizarin crimson, ochre yellow, and expressive brushwork.',
+    isDark: false,
+    canvasBg: '#f6f1e5',
+    accentHex: '#0284c7',
+    primaryColor: 'light-blue',
+    secondaryColor: 'violet',
+    accentColor: 'orange',
+    mutedColor: 'green',
+    fill: 'semi',
+    dash: 'draw',
+    font: 'draw',
+    size: 'm',
+  },
+  {
     id: 'blueprint-dark',
     name: 'Technical Blueprint',
     title: 'Technical Blueprint Dark',
