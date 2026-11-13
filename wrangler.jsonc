@@ -1,0 +1,14 @@
+{
+  "name": "canval",
+  "main": "worker/index.ts",
+  "compatibility_date": "2025-10-01",
+  "routes": [
+    {
+      "pattern": "canval.alexwelcing.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "CLOUD_RUN_ORIGIN": "https://canval-edbhtpvina-uc.a.run.app"
+  }
+}
