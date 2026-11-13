@@ -1,10 +1,16 @@
 import {
+  DefaultColorStyle,
+  DefaultDashStyle,
+  DefaultSizeStyle,
+  PageRecordType,
   createBindingId,
   createShapeId,
+  getIndices,
   toRichText,
   type Editor,
   type TLDefaultColorStyle,
   type TLGeoShapeGeoStyle,
+  type TLRichText,
   type TLShape,
   type TLShapeId,
 } from 'tldraw';
@@ -22,12 +28,21 @@ import type {
   CanvasRegisterSnapshot,
   CanvasShapeSummary,
   CanvasSyscall,
+  ExportFormat,
   SemanticResolution,
   SpatialAnchor,
   StateComputerDecision,
+  StudioToolId,
   VisionHarmonizePayload,
 } from '../types/protocol';
 import { CanvasAnimationEngine } from './animationEngine';
+import { spawnInkSketch } from './inkSketcher';
+import {
+  appendToRichText,
+  buildCodeRichText,
+  buildListRichText,
+  extractHeadlineText,
+} from './richTextBuilder';
 import {
   hasExplicitClearConsent,
   hasExplicitDeleteConsent,
@@ -94,10 +109,12 @@ export function collectCanvasShapeSummaries(editor: Editor): CanvasShapeSummary[
     const reg = ensureShapeRegister(editor, s);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const props = s.props as any;
+    const sketchLabel = typeof s.meta?.sketchLabel === 'string' ? s.meta.sketchLabel : '';
+    const headline = extractHeadlineText(props?.richText);
     const label =
       typeof props?.name === 'string' && props.name
         ? props.name
-        : extractRichTextPlain(props?.richText);
+        : headline || extractRichTextPlain(props?.richText) || sketchLabel;
     const bounds = editor.getShapePageBounds(s.id);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const animMeta = s.meta?.anim as any;
@@ -130,6 +147,9 @@ export interface DirectorResult {
   changedAesthetic?: AestheticEdition;
   requestHarmonizeGoal?: string;
   ideateTarget?: IdeateEnrichmentTarget;
+  requestExport?: { format: ExportFormat; selectionOnly?: boolean };
+  changedTool?: StudioToolId;
+  changedPage?: { name: string; index: number; total: number };
 }
 
 export class CanvasDirector {
@@ -149,11 +169,22 @@ export class CanvasDirector {
       focusRegs = [shapes[shapes.length - 1].reg];
     }
 
+    const rawPtr = editor.inputs?.currentPagePoint;
+    const pointerPoint =
+      rawPtr && Number.isFinite(rawPtr.x) && Number.isFinite(rawPtr.y)
+        ? { x: Math.round(rawPtr.x), y: Math.round(rawPtr.y) }
+        : null;
+    const currentPage = editor.getCurrentPage();
+    const pages = editor.getPages();
+
     return {
       shapes,
       focusRegs,
       editionId,
       activeAnimations: this.animations.activeCount,
+      pointerPoint,
+      currentPageName: currentPage?.name ?? 'Page 1',
+      pageCount: pages.length,
     };
   }
 
@@ -282,6 +313,24 @@ export class CanvasDirector {
           },
         };
       }
+      if (s.type === 'draw') {
+        return {
+          id: s.id,
+          type: 'draw' as const,
+          props: {
+            color: roleToColor(edition, role),
+          },
+        };
+      }
+      if (s.type === 'line') {
+        return {
+          id: s.id,
+          type: 'line' as const,
+          props: {
+            color: edition.tokens.connectorColor,
+          },
+        };
+      }
       return {
         id: s.id,
         type: s.type,
@@ -305,6 +354,24 @@ export class CanvasDirector {
     let cy = bounds.midY;
     const padX = bounds.w * 0.23;
     const padY = bounds.h * 0.23;
+
+    if (anchor === 'pointer') {
+      const ptr = editor.inputs?.currentPagePoint;
+      if (ptr && Number.isFinite(ptr.x) && Number.isFinite(ptr.y)) {
+        const insideViewport =
+          ptr.x >= bounds.minX &&
+          ptr.x <= bounds.maxX &&
+          ptr.y >= bounds.minY &&
+          ptr.y <= bounds.maxY;
+        cx = insideViewport
+          ? ptr.x
+          : Math.min(bounds.maxX - 80, Math.max(bounds.minX + 80, ptr.x));
+        cy = insideViewport
+          ? ptr.y
+          : Math.min(bounds.maxY - 60, Math.max(bounds.minY + 60, ptr.y));
+      }
+      return { cx, cy, isPortrait, vw: bounds.w, vh: bounds.h };
+    }
 
     if (anchor) {
       if (anchor.includes('left')) cx = bounds.minX + padX;
@@ -542,6 +609,10 @@ export class CanvasDirector {
       shapeType: ShapeArchetype['shapeType'];
       geo?: TLGeoShapeGeoStyle;
       label: string;
+      richTextOverride?: TLRichText | null;
+      alignOverride?: 'start' | 'middle' | 'end';
+      verticalAlignOverride?: 'start' | 'middle' | 'end';
+      fontOverride?: AestheticEdition['tokens']['font'] | null;
       role: ColorRole;
       colorOverride: TLDefaultColorStyle | null;
       fillOverride?: AestheticEdition['tokens']['fill'] | null;
@@ -560,7 +631,7 @@ export class CanvasDirector {
       opts.fillOverride ??
       slots.fillOverride ??
       (role === 'accent' ? edition.tokens.accentFill : edition.tokens.fill);
-    const font = slots.fontOverride ?? edition.tokens.font;
+    const font = opts.fontOverride ?? slots.fontOverride ?? edition.tokens.font;
     const size = opts.sizeOverride ?? slots.sizeOverride ?? edition.tokens.size;
     const opacity = speculative ? 0.28 : 1;
     const meta = {
@@ -582,7 +653,7 @@ export class CanvasDirector {
           color,
           font,
           size,
-          richText: toRichText(opts.label),
+          richText: opts.richTextOverride ?? toRichText(opts.label),
         },
       });
     } else if (opts.shapeType === 'text') {
@@ -595,11 +666,11 @@ export class CanvasDirector {
         meta,
         props: {
           color,
-          font: slots.fontOverride ?? edition.tokens.headingFont,
+          font: opts.fontOverride ?? slots.fontOverride ?? edition.tokens.headingFont,
           size: opts.sizeOverride ?? slots.sizeOverride ?? 'xl',
-          textAlign: 'middle',
+          textAlign: opts.alignOverride ?? 'middle',
           autoSize: true,
-          richText: toRichText(opts.label || 'Untitled Study'),
+          richText: opts.richTextOverride ?? toRichText(opts.label || 'Untitled Study'),
         },
       });
     } else if (opts.shapeType === 'frame') {
@@ -634,9 +705,9 @@ export class CanvasDirector {
           fill,
           font,
           size,
-          align: 'middle',
-          verticalAlign: 'middle',
-          richText: toRichText(opts.label),
+          align: opts.alignOverride ?? 'middle',
+          verticalAlign: opts.verticalAlignOverride ?? 'middle',
+          richText: opts.richTextOverride ?? toRichText(opts.label),
         },
       });
     }
@@ -1527,6 +1598,306 @@ export class CanvasDirector {
       return buildReturn(created);
     }
 
+    if (bpKind === 'sequence') {
+      const actors = nodes.slice(0, 4);
+      const actorGap = isPortrait ? 152 : 208;
+      const headerY = cy - 142;
+      const actorXs: number[] = [];
+
+      actors.forEach((actor, idx) => {
+        const ax = cx + (idx - (actors.length - 1) / 2) * actorGap;
+        actorXs.push(ax);
+        const aid = this.spawnNode(editor, {
+          x: ax,
+          y: headerY,
+          w: isPortrait ? 136 : 162,
+          h: 66,
+          shapeType: 'geo',
+          geo: actor.geo === 'note' ? 'rectangle' : actor.geo,
+          label: actor.label,
+          role: actor.role,
+          colorOverride: idx === 0 && effectiveColor ? effectiveColor : null,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        });
+        created.push(aid);
+
+        // Vertical dashed lifeline beneath each actor
+        const lineIdx = getIndices(2);
+        editor.createShape({
+          id: createShapeId(),
+          type: 'line',
+          x: ax,
+          y: headerY + 38,
+          opacity: speculative ? 0.24 : 0.72,
+          meta: {
+            speculative,
+            utteranceId: res.utteranceId,
+            role: 'muted',
+            ...(speculative ? {} : { reg: `s${nextRegSeq++}`, sketchLabel: `${actor.label} lifeline` }),
+          },
+          props: {
+            color: edition.tokens.connectorColor,
+            dash: 'dashed',
+            size: 's',
+            spline: 'line',
+            points: {
+              [lineIdx[0]]: { id: lineIdx[0], index: lineIdx[0], x: 0, y: 0 },
+              [lineIdx[1]]: { id: lineIdx[1], index: lineIdx[1], x: 0, y: 268 },
+            },
+            scale: 1,
+          },
+        });
+      });
+
+      const callLabels = ['1 · request()', '2 · authorize()', '3 · query()', '4 · commit()'];
+      const msgStartY = headerY + 86;
+      const msgStepY = 56;
+      for (let i = 0; i < actorXs.length - 1; i++) {
+        const y = msgStartY + i * msgStepY;
+        editor.createShape({
+          id: createShapeId(),
+          type: 'arrow',
+          x: actorXs[i],
+          y,
+          opacity: speculative ? 0.28 : 1,
+          meta: { speculative, utteranceId: res.utteranceId, role: 'primary' },
+          props: {
+            kind: 'arc',
+            bend: 0,
+            color: edition.tokens.primaryColor,
+            labelColor: edition.tokens.primaryColor,
+            font: 'mono',
+            dash: speculative ? 'dashed' : 'solid',
+            size: 's',
+            arrowheadStart: 'none',
+            arrowheadEnd: 'arrow',
+            start: { x: 4, y: 0 },
+            end: { x: actorXs[i + 1] - actorXs[i] - 4, y: 0 },
+            richText: toRichText(callLabels[i] ?? `step ${i + 1}`),
+          },
+        });
+      }
+
+      if (actorXs.length >= 2) {
+        const retY = msgStartY + (actorXs.length - 1) * msgStepY + 12;
+        const lastX = actorXs[actorXs.length - 1];
+        const firstX = actorXs[0];
+        editor.createShape({
+          id: createShapeId(),
+          type: 'arrow',
+          x: lastX,
+          y: retY,
+          opacity: speculative ? 0.24 : 0.9,
+          meta: { speculative, utteranceId: res.utteranceId, role: 'accent' },
+          props: {
+            kind: 'arc',
+            bend: 0,
+            color: edition.tokens.accentColor,
+            labelColor: edition.tokens.accentColor,
+            font: 'mono',
+            dash: 'dashed',
+            size: 's',
+            arrowheadStart: 'none',
+            arrowheadEnd: 'arrow',
+            start: { x: -4, y: 0 },
+            end: { x: firstX - lastX + 4, y: 0 },
+            richText: toRichText('200 OK · payload'),
+          },
+        });
+      }
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'table') {
+      const cols = 3;
+      const paddedCount = Math.max(6, Math.ceil(nodes.length / cols) * cols);
+      const rows = Math.ceil(paddedCount / cols);
+      const cellW = isPortrait ? 132 : 182;
+      const cellH = 62;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const idx = r * cols + c;
+          const n = nodes[idx] ?? {
+            label: r === 0 ? `Col ${c + 1}` : '—',
+            geo: 'rectangle' as const,
+            role: (r === 0 ? 'accent' : c === 0 ? 'primary' : 'muted') as ColorRole,
+          };
+          const x = cx + (c - (cols - 1) / 2) * cellW;
+          const y = cy + (r - (rows - 1) / 2) * cellH;
+          const isHeader = r === 0;
+          created.push(
+            this.spawnNode(editor, {
+              x,
+              y,
+              w: cellW,
+              h: cellH,
+              shapeType: 'geo',
+              geo: 'rectangle',
+              label: n.label,
+              role: isHeader ? 'accent' : c === 0 ? 'primary' : 'secondary',
+              colorOverride: isHeader && effectiveColor ? effectiveColor : null,
+              fillOverride: isHeader ? 'solid' : 'semi',
+              fontOverride: c === cols - 1 && !isHeader ? 'mono' : undefined,
+              sizeOverride: 's',
+              slots,
+              edition,
+              speculative,
+              utteranceId: res.utteranceId,
+            }),
+          );
+        }
+      }
+      return buildReturn(created);
+    }
+
+    if (bpKind === 'journey') {
+      const stages = nodes.slice(0, 4);
+      const colGap = isPortrait ? 182 : 216;
+      const touchpoints = ['First Impression', 'Spoken Prompt', 'Tactile Polish', 'Archival Share'];
+      const sentiments = ['Curious', 'Delighted', 'In Flow', 'Confident'];
+      const stageIds: TLShapeId[] = [];
+      const extraIds: TLShapeId[] = [];
+
+      stages.forEach((st, idx) => {
+        const sx = cx + (idx - (stages.length - 1) / 2) * colGap;
+        const headerId = this.spawnNode(editor, {
+          x: sx,
+          y: cy - 102,
+          w: isPortrait ? 162 : 188,
+          h: 68,
+          shapeType: 'geo',
+          geo: 'arrow-right',
+          label: st.label,
+          role: st.role,
+          colorOverride: idx === stages.length - 1 ? effectiveColor : null,
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        });
+        stageIds.push(headerId);
+
+        const tpId = this.spawnNode(editor, {
+          x: sx,
+          y: cy + 6,
+          w: isPortrait ? 162 : 184,
+          h: 76,
+          shapeType: 'geo',
+          geo: 'rectangle',
+          label: touchpoints[idx] ?? `Touchpoint ${idx + 1}`,
+          role: 'primary',
+          colorOverride: null,
+          sizeOverride: 's',
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        });
+        extraIds.push(tpId);
+        this.createBoundArrow(editor, headerId, tpId, edition, speculative, res.utteranceId);
+
+        const moodId = this.spawnNode(editor, {
+          x: sx,
+          y: cy + 106,
+          w: 146,
+          h: 58,
+          shapeType: 'geo',
+          geo: 'oval',
+          label: sentiments[idx] ?? 'Positive',
+          role: idx === stages.length - 1 ? 'accent' : 'secondary',
+          colorOverride: null,
+          fillOverride: 'semi',
+          sizeOverride: 's',
+          slots,
+          edition,
+          speculative,
+          utteranceId: res.utteranceId,
+        });
+        extraIds.push(moodId);
+      });
+
+      for (let i = 0; i < stageIds.length - 1; i++) {
+        this.createBoundArrow(editor, stageIds[i], stageIds[i + 1], edition, speculative, res.utteranceId);
+      }
+      created.push(...stageIds, ...extraIds);
+      return buildReturn(stageIds);
+    }
+
+    if (bpKind === 'er_schema') {
+      const entities = nodes.slice(0, 4);
+      const gapX = isPortrait ? 245 : 295;
+      const gapY = 205;
+      const schemaColumns = (rawName: string, idx: number): string[] => {
+        const slug = rawName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_')
+          .replace(/^_+|_+$/g, '') || `table_${idx + 1}`;
+        const fk =
+          idx === 0
+            ? 'email: text UNIQUE'
+            : `owner_id: uuid FK`;
+        return [
+          'id: uuid PK',
+          fk,
+          `${slug}_title: text`,
+          'created_at: timestamptz',
+        ];
+      };
+
+      entities.forEach((ent, idx) => {
+        const col = idx % 2;
+        const row = Math.floor(idx / 2);
+        const ex = cx + (col - 0.5) * gapX;
+        const ey = cy + (row - 0.5) * gapY;
+        const richSchema = buildCodeRichText(ent.label.toUpperCase(), schemaColumns(ent.label, idx));
+        created.push(
+          this.spawnNode(editor, {
+            x: ex,
+            y: ey,
+            w: isPortrait ? 218 : 248,
+            h: 158,
+            shapeType: 'geo',
+            geo: 'rectangle',
+            label: ent.label,
+            richTextOverride: richSchema,
+            alignOverride: 'start',
+            verticalAlignOverride: 'start',
+            fontOverride: 'mono',
+            sizeOverride: 's',
+            role: ent.role,
+            colorOverride: idx === 0 && effectiveColor ? effectiveColor : null,
+            slots,
+            edition,
+            speculative,
+            utteranceId: res.utteranceId,
+          }),
+        );
+      });
+
+      if (created.length >= 2) {
+        this.createBoundArrow(editor, created[0], created[1], edition, speculative, res.utteranceId, '1 : N', {
+          kind: 'elbow',
+          bend: 0,
+        });
+      }
+      if (created.length >= 3) {
+        this.createBoundArrow(editor, created[1], created[2], edition, speculative, res.utteranceId, '1 : N', {
+          kind: 'elbow',
+          bend: 0,
+        });
+      }
+      if (created.length >= 4) {
+        this.createBoundArrow(editor, created[2], created[3], edition, speculative, res.utteranceId, '1 : N', {
+          kind: 'elbow',
+          bend: 0,
+        });
+      }
+      return { ids: created };
+    }
+
     const vertical = isPortrait && bpKind !== 'timeline';
     const stepX = vertical ? 0 : edition.tokens.gapX;
     const stepY = vertical ? 150 : 0;
@@ -1562,7 +1933,11 @@ export class CanvasDirector {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const props = shape.props as any;
     if (typeof props?.name === 'string' && props.name) return props.name.trim();
-    return extractRichTextPlain(props?.richText);
+    const headline = extractHeadlineText(props?.richText);
+    if (headline) return headline;
+    const plain = extractRichTextPlain(props?.richText);
+    if (plain) return plain;
+    return typeof shape.meta?.sketchLabel === 'string' ? shape.meta.sketchLabel : '';
   }
 
   private findShapeByLabelHint(editor: Editor, hint?: string | null, excludeId?: TLShapeId): TLShape | null {
@@ -1577,20 +1952,25 @@ export class CanvasDirector {
       .getCurrentPageShapes()
       .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && s.id !== excludeId);
 
-    // 1. Exact label match (prefer most recently created)
+    // 1. Exact headline or label match (prefer most recently created)
     for (let i = candidates.length - 1; i >= 0; i--) {
       const s = candidates[i];
       if (this.getPlainShapeLabel(s).toLowerCase() === needle) return s;
     }
 
-    // 2. Substring label match or color+shape descriptor match
+    // 2. Substring match across headline, full richText body, or color+shape descriptor
     for (let i = candidates.length - 1; i >= 0; i--) {
       const s = candidates[i];
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const props = s.props as any;
       const lbl = this.getPlainShapeLabel(s).toLowerCase();
-      const desc = `${props?.color ?? ''} ${props?.geo ?? s.type} ${lbl}`.toLowerCase();
-      if ((lbl && (lbl.includes(needle) || needle.includes(lbl))) || desc.includes(needle)) {
+      const fullBody = extractRichTextPlain(props?.richText).toLowerCase();
+      const desc = `${props?.color ?? ''} ${props?.geo ?? s.type} ${lbl} ${fullBody}`.toLowerCase();
+      if (
+        (lbl && (lbl.includes(needle) || needle.includes(lbl))) ||
+        (fullBody && fullBody.includes(needle)) ||
+        desc.includes(needle)
+      ) {
         return s;
       }
     }
@@ -1666,7 +2046,12 @@ export class CanvasDirector {
     if (
       slots.animationKind !== null ||
       slots.spatialRelation !== null ||
-      /\b(move|shift|nudge|slide|put|place|swap|delete|remove|erase|clear|undo|redo|connect|color|paint|spin|orbit|float|bounce|pulse|stop|freeze|rotate|align|distribute|duplicate|frame)\b/i.test(
+      slots.toolSwitch !== null ||
+      slots.sketchMotif !== null ||
+      slots.richCardKind !== null ||
+      slots.pageAction !== null ||
+      slots.exportFormat !== null ||
+      /\b(move|shift|nudge|slide|put|place|swap|delete|remove|erase|clear|undo|redo|connect|color|paint|spin|orbit|float|bounce|pulse|stop|freeze|rotate|align|distribute|duplicate|frame|group|ungroup|pack|stack|stretch|flip|mirror|export|append|underline)\b/i.test(
         slots.cleanText,
       )
     ) {
@@ -1781,6 +2166,9 @@ export class CanvasDirector {
     const summaries: string[] = [];
     let harmonizeGoal: string | undefined;
     let ideateTarget: IdeateEnrichmentTarget | undefined;
+    let requestExport: DirectorResult['requestExport'];
+    let changedTool: StudioToolId | undefined;
+    let changedPage: DirectorResult['changedPage'];
     const newlyCreatedIds: TLShapeId[] = [];
 
     editor.markHistoryStoppingPoint(`voice-commit-${res.utteranceId}`);
@@ -1819,14 +2207,23 @@ export class CanvasDirector {
         if (stepRes?.summary) summaries.push(stepRes.summary);
         if (stepRes?.requestHarmonizeGoal) harmonizeGoal = stepRes.requestHarmonizeGoal;
         if (stepRes?.ideateTarget) ideateTarget = stepRes.ideateTarget;
+        if (stepRes?.requestExport) requestExport = stepRes.requestExport;
+        if (stepRes?.changedTool) changedTool = stepRes.changedTool;
+        if (stepRes?.changedPage) changedPage = stepRes.changedPage;
       }
     });
 
     if (newlyCreatedIds.length > 0) {
-      this.frameIfOutsideViewport(editor, newlyCreatedIds);
+      const currentPageId = editor.getCurrentPageId();
+      const onCurrentPage = newlyCreatedIds.filter(
+        (id) => editor.getShape(id)?.parentId === currentPageId,
+      );
+      if (onCurrentPage.length > 0) {
+        this.frameIfOutsideViewport(editor, onCurrentPage);
+      }
     }
 
-    if (summaries.length === 0 && !harmonizeGoal) return null;
+    if (summaries.length === 0 && !harmonizeGoal && !requestExport) return null;
 
     return {
       summary: summaries.join(' · ') || 'Updated canvas',
@@ -1834,6 +2231,9 @@ export class CanvasDirector {
       changedAesthetic,
       requestHarmonizeGoal: harmonizeGoal,
       ideateTarget,
+      requestExport,
+      changedTool,
+      changedPage,
     };
   }
 
@@ -1846,6 +2246,475 @@ export class CanvasDirector {
     newlyCreatedIds: TLShapeId[],
   ): DirectorResult | null {
     switch (syscall.op) {
+      case 'TOOL': {
+        if (syscall.color) {
+          editor.setStyleForNextShapes(DefaultColorStyle, syscall.color);
+        }
+        if (syscall.size) {
+          editor.setStyleForNextShapes(DefaultSizeStyle, syscall.size);
+        }
+        if (syscall.dash) {
+          editor.setStyleForNextShapes(DefaultDashStyle, syscall.dash);
+        }
+        editor.setCurrentTool(syscall.tool);
+        const toolNames: Record<StudioToolId, string> = {
+          select: 'Pointer select',
+          draw: 'Freehand ink pen',
+          highlight: 'Highlighter marker',
+          laser: 'Presentation laser',
+          eraser: 'Precision eraser',
+          hand: 'Hand pan',
+          arrow: 'Connector arrow',
+          line: 'Spline line',
+          note: 'Sticky note',
+          text: 'Typography tool',
+          frame: 'Frame tool',
+        };
+        return {
+          summary: `${toolNames[syscall.tool] ?? syscall.tool}${syscall.color ? ` (${syscall.color})` : ''}`,
+          changedTool: syscall.tool,
+        };
+      }
+
+      case 'SKETCH': {
+        const isAnnotation =
+          syscall.motif === 'circle_around' ||
+          syscall.motif === 'underline' ||
+          syscall.motif === 'cross_out' ||
+          syscall.motif === 'bracket';
+        let targetBounds: { cx: number; cy: number; w: number; h: number } | null = null;
+
+        if (
+          isAnnotation ||
+          (syscall.targets && syscall.targets.length > 0) ||
+          syscall.targetLabelHint
+        ) {
+          const resolved = this.resolveShapesFromRegs(
+            editor,
+            syscall.targets ?? [],
+            syscall.targetLabelHint,
+          ).filter((s) => s.type !== 'draw' || Boolean(syscall.targetLabelHint));
+          if (resolved.length > 0) {
+            const bList = resolved
+              .map((s) => editor.getShapePageBounds(s.id))
+              .filter((b): b is NonNullable<typeof b> => Boolean(b));
+            if (bList.length > 0) {
+              const minX = Math.min(...bList.map((b) => b.minX));
+              const maxX = Math.max(...bList.map((b) => b.maxX));
+              const minY = Math.min(...bList.map((b) => b.minY));
+              const maxY = Math.max(...bList.map((b) => b.maxY));
+              targetBounds = {
+                cx: (minX + maxX) / 2,
+                cy: (minY + maxY) / 2,
+                w: maxX - minX,
+                h: maxY - minY,
+              };
+            }
+          }
+        }
+
+        if (!targetBounds) {
+          const pt = this.getViewportAnchorPoint(
+            editor,
+            syscall.anchor ?? null,
+            !syscall.anchor,
+            260,
+            140,
+          );
+          targetBounds = { cx: pt.cx, cy: pt.cy, w: 220, h: 110 };
+        }
+
+        const color = syscall.color ?? activeEdition.tokens.accentColor;
+        const reg = `s${nextRegSeq++}`;
+        const sketched = spawnInkSketch(editor, {
+          motif: syscall.motif,
+          target: targetBounds,
+          color,
+          size: syscall.size ?? activeEdition.tokens.size,
+          asCubicSpline: syscall.asCubicSpline,
+          utteranceId: res.utteranceId,
+          reg,
+        });
+        if (!isAnnotation) {
+          this.lastCreatedIds = [sketched.id];
+        }
+        newlyCreatedIds.push(sketched.id);
+        return { summary: `Sketched ${sketched.label.toLowerCase()}` };
+      }
+
+      case 'RICH_CARD': {
+        const items = syscall.items.length > 0 ? syscall.items : ['First item', 'Second item'];
+        const cardW = syscall.cardKind === 'code' ? 325 : 268;
+        const cardH = Math.max(152, 74 + items.length * 32);
+        const pt = this.getViewportAnchorPoint(
+          editor,
+          syscall.anchor ?? null,
+          !syscall.anchor,
+          cardW,
+          cardH,
+        );
+        const richDoc =
+          syscall.cardKind === 'code'
+            ? buildCodeRichText(syscall.title ?? 'Snippet', items)
+            : buildListRichText(
+                syscall.title ??
+                  (syscall.cardKind === 'checklist'
+                    ? 'Checklist'
+                    : syscall.cardKind === 'ordered'
+                      ? 'Steps'
+                      : 'Notes'),
+                items,
+                syscall.cardKind,
+              );
+        const id = this.spawnNode(editor, {
+          x: pt.cx,
+          y: pt.cy,
+          w: cardW,
+          h: cardH,
+          shapeType: syscall.shapeKind === 'note' ? 'note' : 'geo',
+          geo: 'rectangle',
+          label: syscall.title ?? 'List',
+          richTextOverride: richDoc,
+          alignOverride: 'start',
+          verticalAlignOverride: 'start',
+          fontOverride: syscall.cardKind === 'code' ? 'mono' : undefined,
+          sizeOverride: syscall.cardKind === 'code' ? 's' : undefined,
+          role: syscall.cardKind === 'code' ? 'secondary' : 'primary',
+          colorOverride: syscall.color ?? null,
+          slots,
+          edition: activeEdition,
+          speculative: false,
+          utteranceId: res.utteranceId,
+        });
+        this.lastCreatedIds = [id];
+        newlyCreatedIds.push(id);
+        return {
+          summary:
+            syscall.cardKind === 'code'
+              ? `Added code card${syscall.title ? ` · ${syscall.title}` : ''}`
+              : `Created ${syscall.cardKind} card (${items.length} items)`,
+        };
+      }
+
+      case 'APPEND_TEXT': {
+        const candidates = this.resolveShapesFromRegs(
+          editor,
+          syscall.targets,
+          syscall.targetLabelHint,
+        ).filter(
+          (s) => !s.meta?.locked && (s.type === 'geo' || s.type === 'note' || s.type === 'text'),
+        );
+        if (candidates.length === 0) return null;
+        const target = candidates[0];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const props = target.props as any;
+        const updatedRich = appendToRichText(props?.richText, syscall.text, syscall.asBullet ?? true);
+        const nextProps: Record<string, unknown> = {
+          richText: updatedRich,
+        };
+        if (target.type === 'geo') {
+          nextProps.align = 'start';
+          nextProps.verticalAlign = 'start';
+          if (typeof props?.h === 'number') {
+            nextProps.h = Math.max(props.h, props.h + 28);
+          }
+          if (typeof props?.w === 'number' && props.w < 230) {
+            nextProps.w = 240;
+          }
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        editor.updateShape({ id: target.id, type: target.type, props: nextProps as any });
+        return { summary: `Appended "${syscall.text}"` };
+      }
+
+      case 'PAGE': {
+        const pagesBefore = editor.getPages();
+        const curId = editor.getCurrentPageId();
+        const curIdx = Math.max(0, pagesBefore.findIndex((p) => p.id === curId));
+
+        if (syscall.action === 'new') {
+          const name = syscall.name?.trim() || `Study ${pagesBefore.length + 1}`;
+          const newPageId = PageRecordType.createId();
+          editor.createPage({ id: newPageId, name });
+          editor.setCurrentPage(newPageId);
+          this.lastCreatedIds = [];
+          this.animations.syncCurrentPage();
+          const pagesAfter = editor.getPages();
+          const idx = pagesAfter.findIndex((p) => p.id === newPageId);
+          return {
+            summary: `Opened ${name} (${idx + 1}/${pagesAfter.length})`,
+            changedPage: { name, index: idx + 1, total: pagesAfter.length },
+          };
+        }
+
+        if (syscall.action === 'duplicate') {
+          editor.duplicatePage(curId);
+          this.lastCreatedIds = [];
+          this.animations.syncCurrentPage();
+          const pagesAfter = editor.getPages();
+          const active = editor.getCurrentPage();
+          const idx = pagesAfter.findIndex((p) => p.id === active.id);
+          return {
+            summary: `Duplicated to ${active.name} (${idx + 1}/${pagesAfter.length})`,
+            changedPage: { name: active.name, index: idx + 1, total: pagesAfter.length },
+          };
+        }
+
+        if (syscall.action === 'rename') {
+          const nextName = syscall.name?.trim() || 'Untitled Study';
+          editor.renamePage(curId, nextName);
+          return {
+            summary: `Renamed page to "${nextName}"`,
+            changedPage: { name: nextName, index: curIdx + 1, total: pagesBefore.length },
+          };
+        }
+
+        let targetPage = pagesBefore[curIdx];
+        if (syscall.action === 'next') {
+          targetPage = pagesBefore[(curIdx + 1) % pagesBefore.length];
+        } else if (syscall.action === 'prev') {
+          targetPage = pagesBefore[(curIdx - 1 + pagesBefore.length) % pagesBefore.length];
+        } else if (syscall.action === 'first') {
+          targetPage = pagesBefore[0];
+        } else if (syscall.action === 'last') {
+          targetPage = pagesBefore[pagesBefore.length - 1];
+        } else if (syscall.action === 'goto') {
+          if (
+            syscall.pageNumber &&
+            syscall.pageNumber >= 1 &&
+            syscall.pageNumber <= pagesBefore.length
+          ) {
+            targetPage = pagesBefore[syscall.pageNumber - 1];
+          } else if (syscall.name) {
+            const needle = syscall.name.toLowerCase();
+            const byName = pagesBefore.find((p) => p.name.toLowerCase().includes(needle));
+            if (byName) targetPage = byName;
+          }
+        }
+
+        if (targetPage && targetPage.id !== curId) {
+          editor.setCurrentPage(targetPage.id);
+          this.lastCreatedIds = [];
+          this.animations.syncCurrentPage();
+          if (editor.getCurrentPageShapes().length > 0) {
+            editor.zoomToFit({ animation: { duration: 220 } });
+          }
+        }
+        const active = editor.getCurrentPage();
+        const activeIdx = editor.getPages().findIndex((p) => p.id === active.id);
+        return {
+          summary: `Page ${activeIdx + 1}/${pagesBefore.length} · ${active.name}`,
+          changedPage: { name: active.name, index: activeIdx + 1, total: pagesBefore.length },
+        };
+      }
+
+      case 'EXPORT': {
+        return {
+          summary:
+            syscall.format === 'copy'
+              ? 'Copying PNG to clipboard…'
+              : `Exporting ${syscall.format.toUpperCase()}…`,
+          requestExport: {
+            format: syscall.format,
+            selectionOnly: syscall.selectionOnly,
+          },
+        };
+      }
+
+      case 'GROUP': {
+        let targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => !s.meta?.locked && s.type !== 'group',
+        );
+        if (targets.length < 2) {
+          targets = editor
+            .getCurrentPageShapes()
+            .filter((s) => !s.meta?.speculative && s.type !== 'arrow' && !s.meta?.locked);
+        }
+        if (targets.length < 2) return null;
+        editor.groupShapes(targets.map((s) => s.id));
+        const sel = editor.getSelectedShapeIds();
+        if (sel.length > 0) this.lastCreatedIds = [...sel];
+        return { summary: `Grouped ${targets.length} elements` };
+      }
+
+      case 'UNGROUP': {
+        const groups = editor
+          .getCurrentPageShapes()
+          .filter((s) => !s.meta?.speculative && s.type === 'group' && !s.meta?.locked);
+        if (groups.length === 0) return null;
+        editor.ungroupShapes(groups.map((g) => g.id));
+        return { summary: 'Ungrouped elements' };
+      }
+
+      case 'PACK': {
+        let targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => !s.meta?.locked && s.type !== 'frame',
+        );
+        if (targets.length < 2) {
+          targets = editor
+            .getCurrentPageShapes()
+            .filter(
+              (s) =>
+                !s.meta?.speculative &&
+                s.type !== 'arrow' &&
+                s.type !== 'frame' &&
+                !s.meta?.locked,
+            );
+        }
+        if (targets.length < 2) return null;
+        editor.packShapes(
+          targets.map((s) => s.id),
+          24,
+        );
+        return { summary: `Packed ${targets.length} elements` };
+      }
+
+      case 'STACK': {
+        let targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => !s.meta?.locked && s.type !== 'frame',
+        );
+        if (targets.length < 2) {
+          targets = editor
+            .getCurrentPageShapes()
+            .filter(
+              (s) =>
+                !s.meta?.speculative &&
+                s.type !== 'arrow' &&
+                s.type !== 'frame' &&
+                !s.meta?.locked,
+            );
+        }
+        if (targets.length < 2) return null;
+        editor.stackShapes(
+          targets.map((s) => s.id),
+          syscall.direction,
+          22,
+        );
+        return { summary: `Stacked ${syscall.direction}ly` };
+      }
+
+      case 'STRETCH': {
+        let targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => !s.meta?.locked && s.type !== 'frame',
+        );
+        if (targets.length < 2) {
+          targets = editor
+            .getCurrentPageShapes()
+            .filter(
+              (s) =>
+                !s.meta?.speculative &&
+                s.type !== 'arrow' &&
+                s.type !== 'frame' &&
+                !s.meta?.locked,
+            );
+        }
+        if (targets.length < 2) return null;
+        const ids = targets.map((s) => s.id);
+        if (syscall.direction === 'both') {
+          editor.stretchShapes(ids, 'horizontal');
+          editor.stretchShapes(ids, 'vertical');
+          return { summary: 'Matched uniform dimensions' };
+        }
+        editor.stretchShapes(ids, syscall.direction);
+        return { summary: `Matched ${syscall.direction === 'horizontal' ? 'width' : 'height'}` };
+      }
+
+      case 'FLIP': {
+        const targets = this.resolveShapesFromRegs(editor, syscall.targets).filter(
+          (s) => !s.meta?.locked,
+        );
+        if (targets.length === 0) return null;
+        editor.flipShapes(
+          targets.map((s) => s.id),
+          syscall.axis,
+        );
+        return { summary: `Mirrored ${syscall.axis}ly` };
+      }
+
+      case 'GRID': {
+        const parts: string[] = [];
+        if (typeof syscall.gridMode === 'boolean') {
+          editor.updateInstanceState({ isGridMode: syscall.gridMode });
+          parts.push(syscall.gridMode ? 'Grid visible' : 'Grid hidden');
+        }
+        if (typeof syscall.snapMode === 'boolean') {
+          editor.user.updateUserPreferences({ isSnapMode: syscall.snapMode });
+          parts.push(syscall.snapMode ? 'Snap active' : 'Snap off');
+        }
+        return { summary: parts.join(' · ') || 'Updated studio grid' };
+      }
+
+      case 'STUDIO_GUIDE': {
+        const pt = this.getViewportAnchorPoint(editor, null, true, 840, 290);
+        const sections: { title: string; role: ColorRole; items: string[] }[] = [
+          {
+            title: 'Create & Sketch',
+            role: 'primary',
+            items: [
+              '"Sequence diagram" · "ER schema"',
+              '"Bullet list with Design, Build, Ship"',
+              '"Circle around Gateway" · "Underline"',
+              '"Put a yellow note right here"',
+            ],
+          },
+          {
+            title: 'Tools, Layout & Motion',
+            role: 'accent',
+            items: [
+              '"Pen mode" · "Laser pointer" · "Select mode"',
+              '"Pack shapes" · "Stack vertically" · "Group"',
+              '"Orbit Earth around Sun" · "Float gently"',
+              '"Show grid" · "Enable snap"',
+            ],
+          },
+          {
+            title: 'Pages, Themes & Export',
+            role: 'secondary',
+            items: [
+              '"New page called Wireframe" · "Next page"',
+              '"Kyoto Washi" · "Harmonize the canvas"',
+              '"Export PNG" · "Export SVG" · "Copy image"',
+              '"Lock that" · "Undo" · "Clear canvas"',
+            ],
+          },
+        ];
+
+        const cardW = 264;
+        const cardH = 228;
+        const gap = pt.isPortrait ? 0 : 284;
+        const vGap = pt.isPortrait ? 248 : 0;
+        const guideIds: TLShapeId[] = [];
+
+        sections.forEach((sec, idx) => {
+          const sx = pt.cx + (idx - 1) * gap;
+          const sy = pt.cy + (idx - 1) * vGap;
+          const cid = this.spawnNode(editor, {
+            x: sx,
+            y: sy,
+            w: cardW,
+            h: cardH,
+            shapeType: 'geo',
+            geo: 'rectangle',
+            label: sec.title,
+            richTextOverride: buildListRichText(sec.title, sec.items, 'bullet'),
+            alignOverride: 'start',
+            verticalAlignOverride: 'start',
+            sizeOverride: 's',
+            role: sec.role,
+            colorOverride: null,
+            slots,
+            edition: activeEdition,
+            speculative: false,
+            utteranceId: res.utteranceId,
+          });
+          guideIds.push(cid);
+          newlyCreatedIds.push(cid);
+        });
+
+        this.lastCreatedIds = guideIds;
+        return { summary: 'Placed Spoken Studio voice reference' };
+      }
+
       case 'LAYOUT': {
         const kind = syscall.kind ?? slots.explicitBlueprintId ?? res.blueprintId;
         const out = this.renderBlueprint(editor, kind, res, slots, activeEdition, false, {

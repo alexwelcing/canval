@@ -3,7 +3,34 @@ import type {
   CatalogAnimationKind,
   IntentKind,
 } from '../design/catalog';
+import type { SketchMotif } from '../canvas/inkSketcher';
+import type { RichTextListKind } from '../canvas/richTextBuilder';
 import type { TLDefaultColorStyle, TLDefaultDashStyle, TLDefaultSizeStyle } from 'tldraw';
+
+export type StudioToolId =
+  | 'select'
+  | 'draw'
+  | 'highlight'
+  | 'laser'
+  | 'eraser'
+  | 'hand'
+  | 'arrow'
+  | 'line'
+  | 'note'
+  | 'text'
+  | 'frame';
+
+export type ExportFormat = 'png' | 'svg' | 'copy' | 'json';
+
+export type PageAction =
+  | 'new'
+  | 'next'
+  | 'prev'
+  | 'first'
+  | 'last'
+  | 'duplicate'
+  | 'rename'
+  | 'goto';
 
 export type WordWithConfidence = [word: string, confidence: number];
 
@@ -101,6 +128,10 @@ export interface CanvasRegisterSnapshot {
   focusRegs: string[]; // Most recently created/selected shape registers (e.g. ["s2"])
   editionId: string;
   activeAnimations: number;
+  /** Current pointer/touch page coordinates for deictic "right here" placement */
+  pointerPoint?: { x: number; y: number } | null;
+  currentPageName?: string;
+  pageCount?: number;
 }
 
 export type SpatialAnchor =
@@ -112,7 +143,8 @@ export type SpatialAnchor =
   | 'right'
   | 'bottom-left'
   | 'bottom'
-  | 'bottom-right';
+  | 'bottom-right'
+  | 'pointer';
 
 export type SpatialRelation = 'above' | 'below' | 'left-of' | 'right-of' | 'near';
 
@@ -149,6 +181,86 @@ export type CanvasSyscall =
       listLabels?: string[];
       anchor?: SpatialAnchor | null;
       color?: TLDefaultColorStyle | null;
+    }
+  | {
+      op: 'SKETCH';
+      motif: SketchMotif;
+      targets?: string[];
+      targetLabelHint?: string | null;
+      anchor?: SpatialAnchor | null;
+      color?: TLDefaultColorStyle | null;
+      size?: TLDefaultSizeStyle | null;
+      asCubicSpline?: boolean;
+    }
+  | {
+      op: 'RICH_CARD';
+      cardKind: 'bullet' | 'ordered' | 'checklist' | 'code';
+      title?: string | null;
+      items: string[];
+      shapeKind?: 'note' | 'card';
+      anchor?: SpatialAnchor | null;
+      color?: TLDefaultColorStyle | null;
+    }
+  | {
+      op: 'APPEND_TEXT';
+      targets: string[];
+      targetLabelHint?: string | null;
+      text: string;
+      asBullet?: boolean;
+      listKind?: RichTextListKind;
+    }
+  | {
+      op: 'TOOL';
+      tool: StudioToolId;
+      color?: TLDefaultColorStyle | null;
+      size?: TLDefaultSizeStyle | null;
+      dash?: TLDefaultDashStyle | null;
+    }
+  | {
+      op: 'PAGE';
+      action: PageAction;
+      name?: string | null;
+      pageNumber?: number | null;
+    }
+  | {
+      op: 'EXPORT';
+      format: ExportFormat;
+      selectionOnly?: boolean;
+    }
+  | {
+      op: 'GROUP';
+      targets: string[];
+    }
+  | {
+      op: 'UNGROUP';
+      targets: string[];
+    }
+  | {
+      op: 'PACK';
+      targets: string[];
+    }
+  | {
+      op: 'STACK';
+      targets: string[];
+      direction: 'horizontal' | 'vertical';
+    }
+  | {
+      op: 'STRETCH';
+      targets: string[];
+      direction: 'horizontal' | 'vertical' | 'both';
+    }
+  | {
+      op: 'FLIP';
+      targets: string[];
+      axis: 'horizontal' | 'vertical';
+    }
+  | {
+      op: 'GRID';
+      gridMode?: boolean | null;
+      snapMode?: boolean | null;
+    }
+  | {
+      op: 'STUDIO_GUIDE';
     }
   | {
       op: 'MOVE';

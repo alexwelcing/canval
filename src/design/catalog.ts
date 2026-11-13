@@ -413,6 +413,17 @@ export const AESTHETIC_EDITIONS: AestheticEdition[] = [
 export type IntentKind =
   | 'create_shape'
   | 'compose_layout'
+  | 'sketch_ink'
+  | 'rich_text_card'
+  | 'append_text'
+  | 'switch_tool'
+  | 'manage_page'
+  | 'export_canvas'
+  | 'group_ungroup'
+  | 'layout_pack_stack'
+  | 'transform_flip'
+  | 'toggle_grid_snap'
+  | 'studio_guide'
   | 'apply_aesthetic'
   | 'connect_shapes'
   | 'style_color'
@@ -458,16 +469,104 @@ export const INTENT_PROTOTYPES: IntentPrototype[] = [
     kind: 'create_shape',
     title: 'Create, draw, add, or spawn new shapes, boxes, circles, stars, notes, or text on canvas',
     exemplars:
-      'draw a box, draw three circles in a row, add a rectangle, create four stars, put a sticky note here, place a diamond decision node, add a headline text, create a card called authentication, drop two clouds, spawn five hexagons',
+      'draw a box, draw three circles in a row, add a rectangle, create four stars, put a sticky note right here, place a diamond decision node, add a headline text, create a card called authentication, drop two clouds, spawn five hexagons',
     speculativeSafe: true,
   },
   {
     id: 'intent-compose-architecture',
     kind: 'compose_layout',
-    title: 'Compose multi-node diagram, flowchart, architecture, mindmap, kanban, matrix, or timeline layout',
+    title: 'Compose multi-node diagram, flowchart, architecture, mindmap, kanban, matrix, sequence, table, journey, or schema layout',
     exemplars:
-      'draw a system architecture diagram, sketch a four step onboarding flowchart, create a mindmap brainstorm, build a kanban board with todo doing done, make a two by two quadrant matrix, create a project roadmap timeline, mobile bento wireframe layout',
+      'draw a system architecture diagram, sketch a four step onboarding flowchart, create a mindmap brainstorm, build a kanban board with todo doing done, make a two by two quadrant matrix, create a project roadmap timeline, sequence diagram, database schema, user journey map, three by three table',
     speculativeSafe: true,
+  },
+  {
+    id: 'intent-sketch-ink',
+    kind: 'sketch_ink',
+    title: 'Sketch organic freehand ink strokes, circle around a shape, underline, cross out, spiral, wave, sparkline, divider, or checkmark',
+    exemplars:
+      'circle that in red ink, underline the title, cross that out, sketch a sine wave, draw a spiral, draw a horizontal divider line, sketch a sparkline trend curve, draw a green checkmark, sketch a lightning bolt, draw a smiley face, draw a curly brace',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-rich-card',
+    kind: 'rich_text_card',
+    title: 'Create structured bullet list, numbered list, checklist note, or formatted code block card',
+    exemplars:
+      'create a bullet list called Goals with Design Build Ship, make a numbered list with Step one Step two Step three, add a checklist card with Auth Database Deploy, create a code card with const ready equals true',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-append-text',
+    kind: 'append_text',
+    title: 'Append or add a new bullet item or line of text inside an existing note or card',
+    exemplars:
+      'append Ship to production to that note, add bullet Write tests to Goals, add item Review PR to the checklist',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-switch-tool',
+    kind: 'switch_tool',
+    title: 'Switch active tldraw drawing instrument: pen, marker, highlighter, laser pointer, hand pan, eraser, arrow, or select pointer',
+    exemplars:
+      'pen mode, switch to red marker, ink pen, yellow highlighter, laser pointer, presentation laser, hand tool, pan mode, select tool, pointer mode, arrow tool, eraser mode',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-manage-page',
+    kind: 'manage_page',
+    title: 'Create, duplicate, rename, or navigate between canvas pages and presentation slides',
+    exemplars:
+      'new page, create a new page called Architecture, next page, previous page, go to page one, duplicate this page, next slide, rename page to Overview',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-export-canvas',
+    kind: 'export_canvas',
+    title: 'Export, download, snapshot, or copy the artwork as PNG, SVG, clipboard image, or JSON backup',
+    exemplars:
+      'export PNG, download SVG, save image, export diagram as vector, copy image to clipboard, take a snapshot, export JSON backup',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-group-ungroup',
+    kind: 'group_ungroup',
+    title: 'Group shapes together into a native tldraw group or ungroup an existing group',
+    exemplars:
+      'group these shapes together, group all, ungroup that, ungroup everything',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-pack-stack',
+    kind: 'layout_pack_stack',
+    title: 'Pack shapes tightly together, stack evenly, or stretch to match width, height, or same size',
+    exemplars:
+      'pack shapes tightly, pack them together, stack horizontally, stack vertically, stretch to same width, match height, make them the same size',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-flip',
+    kind: 'transform_flip',
+    title: 'Flip or mirror shapes horizontally or vertically',
+    exemplars:
+      'flip horizontally, mirror horizontally, flip vertically, mirror upside down',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-grid-snap',
+    kind: 'toggle_grid_snap',
+    title: 'Show or hide background dot grid or toggle magnetic snap alignment mode',
+    exemplars:
+      'show grid, turn on the grid, hide grid, turn off grid, enable snap mode, turn on snapping, disable snap',
+    speculativeSafe: false,
+  },
+  {
+    id: 'intent-studio-guide',
+    kind: 'studio_guide',
+    title: 'Show voice studio command guide, examples, or help reference card on canvas',
+    exemplars:
+      'what can I say, show voice commands, studio guide, show examples, help me use voice',
+    speculativeSafe: false,
   },
   {
     id: 'intent-apply-aesthetic',
@@ -506,7 +605,7 @@ export const INTENT_PROTOTYPES: IntentPrototype[] = [
     kind: 'transform_move',
     title: 'Move, shift, nudge, slide, or reposition shapes to a direction or corner on the canvas',
     exemplars:
-      'move it to the right, nudge that up a bit, shift everything left, push it down, move to the center of the canvas, put that circle in the top right corner, slide it to the bottom left, bring it to the top',
+      'move it to the right, nudge that up a bit, shift everything left, push it down, move to the center of the canvas, put that circle in the top right corner, slide it to the bottom left, bring it right here',
     speculativeSafe: false,
   },
   {
@@ -711,6 +810,10 @@ export type BlueprintKind =
   | 'state_machine'
   | 'layers'
   | 'comparison'
+  | 'sequence'
+  | 'table'
+  | 'journey'
+  | 'er_schema'
   | 'row'
   | 'column';
 
@@ -923,7 +1026,7 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
     id: 'comparison',
     title: 'Side-by-side comparison table, pros and cons, or before vs after columns',
     exemplars:
-      'pros and cons comparison, side by side versus table, option a vs option b, before and after comparison, tradeoffs chart',
+      'pros and cons comparison, side by side versus chart, option a vs option b, before and after comparison, tradeoffs chart',
     defaultNodes: [
       { label: 'Traditional UI', geo: 'rectangle', role: 'muted' },
       { label: 'Spoken Studio', geo: 'rectangle', role: 'accent' },
@@ -931,6 +1034,59 @@ export const LAYOUT_BLUEPRINTS: LayoutBlueprint[] = [
       { label: 'Zero Buttons · Direct Voice', geo: 'rectangle', role: 'primary' },
       { label: 'Manual Pixel Alignment', geo: 'rectangle', role: 'muted' },
       { label: 'Instant Curatorial Harmony', geo: 'rectangle', role: 'secondary' },
+    ],
+  },
+  {
+    id: 'sequence',
+    title: 'UML sequence diagram with actor headers, vertical lifelines, and request/response message arrows',
+    exemplars:
+      'sequence diagram, uml sequence, request response call sequence, api interaction sequence with lifelines, client server database message flow',
+    defaultNodes: [
+      { label: 'Client App', geo: 'oval', role: 'secondary' },
+      { label: 'Edge Gateway', geo: 'rectangle', role: 'primary' },
+      { label: 'Auth Service', geo: 'hexagon', role: 'accent' },
+      { label: 'Primary DB', geo: 'trapezoid', role: 'muted' },
+    ],
+  },
+  {
+    id: 'table',
+    title: 'Structured multi-row multi-column data table, spreadsheet grid, or pricing matrix',
+    exemplars:
+      'draw a table, three by three table, data table grid, pricing tiers table, feature matrix spreadsheet, structured rows and columns table',
+    defaultNodes: [
+      { label: 'Layer', geo: 'rectangle', role: 'accent' },
+      { label: 'Model', geo: 'rectangle', role: 'accent' },
+      { label: 'Latency', geo: 'rectangle', role: 'accent' },
+      { label: 'Speech', geo: 'rectangle', role: 'primary' },
+      { label: 'Earlybird 29M', geo: 'rectangle', role: 'secondary' },
+      { label: '80 ms', geo: 'rectangle', role: 'muted' },
+      { label: 'Design', geo: 'rectangle', role: 'primary' },
+      { label: 'Gemma 2 MRL', geo: 'rectangle', role: 'secondary' },
+      { label: '12 ms', geo: 'rectangle', role: 'muted' },
+    ],
+  },
+  {
+    id: 'journey',
+    title: 'User journey map or customer experience stages with touchpoints and sentiment notes',
+    exemplars:
+      'user journey map, customer journey stages, experience map with touchpoints and emotions, service blueprint journey',
+    defaultNodes: [
+      { label: '1 · Discover', geo: 'arrow-right', role: 'secondary' },
+      { label: '2 · Speak', geo: 'arrow-right', role: 'primary' },
+      { label: '3 · Refine', geo: 'arrow-right', role: 'primary' },
+      { label: '4 · Export', geo: 'arrow-right', role: 'accent' },
+    ],
+  },
+  {
+    id: 'er_schema',
+    title: 'Database entity-relationship ER schema diagram with table field cards and foreign-key connectors',
+    exemplars:
+      'database schema diagram, entity relationship diagram, er diagram, sql tables and foreign keys, data model schema',
+    defaultNodes: [
+      { label: 'users', geo: 'rectangle', role: 'primary' },
+      { label: 'projects', geo: 'rectangle', role: 'accent' },
+      { label: 'pages', geo: 'rectangle', role: 'secondary' },
+      { label: 'assets', geo: 'rectangle', role: 'muted' },
     ],
   },
   {

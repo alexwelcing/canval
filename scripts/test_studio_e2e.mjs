@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import WebSocket from 'ws';
+import { drawShapeProps, geoShapeProps, lineShapeProps } from '../node_modules/tldraw/dist-esm/index.mjs';
+import { buildDrawMotifSegments, buildSplineMotifPoints } from '../src/canvas/inkSketcher.ts';
+import {
+  appendToRichText,
+  buildCodeRichText,
+  buildListRichText,
+  extractHeadlineText,
+} from '../src/canvas/richTextBuilder.ts';
 import {
   buildStateComputerMessages,
   compileCompoundSyscalls,
@@ -17,6 +26,8 @@ const serverProc = spawn(process.execPath, ['server/index.mjs'], {
 
 serverProc.stdout.on('data', (d) => process.stdout.write(`[srv] ${d}`));
 serverProc.stderr.on('data', (d) => process.stderr.write(`[srv-err] ${d}`));
+
+let exitCode = 0;
 
 try {
   // Wait for server HTTP port + 3-model readiness
@@ -362,7 +373,254 @@ try {
     `13. Rapid-Fire 20-Command Benchmark PASS: avgGemmaMs=${avgResolveMs}ms, lruWarmMs=${avgCachedMs}ms, avgStateCompilerMs=${avgStateMs}ms`,
   );
 
-  console.log('\nALL 13 E2E STUDIO + SPEED + CREATIVE BREADTH TESTS PASSED 100%!');
+  // 14. Test New Architectural & Product Blueprints (sequence, table, journey, er_schema)
+  const newBlueprintChecks = [
+    { text: 'draw a UML sequence diagram', expectedBp: 'sequence' },
+    { text: 'create a three by three pricing table', expectedBp: 'table' },
+    { text: 'draw a customer journey map', expectedBp: 'journey' },
+    { text: 'build a database schema diagram', expectedBp: 'er_schema' },
+  ];
+  for (const bchk of newBlueprintChecks) {
+    const r = await fetch(`${BASE}/api/voice/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: bchk.text,
+        words: bchk.text.split(/\s+/).map((w) => [w, 0.99]),
+        shapes: [],
+      }),
+    });
+    const { resolution } = await r.json();
+    const compiled = compileCompoundSyscalls(null, emptySnap, resolution);
+    assert.equal(compiled.syscall.op, 'LAYOUT', `Expected LAYOUT for "${bchk.text}", got ${compiled.syscall.op}`);
+    assert.equal(
+      compiled.syscall.kind,
+      bchk.expectedBp,
+      `Expected blueprint ${bchk.expectedBp} for "${bchk.text}", got ${compiled.syscall.kind}`,
+    );
+  }
+  console.log('14. New product & engineering blueprints (sequence, table, journey, er_schema) PASS');
+
+  // 15. Test Native tldraw Creative Studio Syscalls (Tools, Ink Sketch, Rich Cards, Pages, Export, Group/Pack/Stack/Stretch/Flip/Grid, Pointer Anchor)
+  const studioChecks = [
+    {
+      text: 'pen mode',
+      snap: emptySnap,
+      check: (s) => s.op === 'TOOL' && s.tool === 'draw',
+    },
+    {
+      text: 'red highlighter',
+      snap: emptySnap,
+      check: (s) => s.op === 'TOOL' && s.tool === 'highlight' && s.color === 'red',
+    },
+    {
+      text: 'laser pointer',
+      snap: emptySnap,
+      check: (s) => s.op === 'TOOL' && s.tool === 'laser',
+    },
+    {
+      text: 'circle around Moon in red ink',
+      snap: populatedSnap,
+      check: (s) =>
+        s.op === 'SKETCH' &&
+        s.motif === 'circle_around' &&
+        s.targets.includes('s1') &&
+        s.color === 'red',
+    },
+    {
+      text: 'sketch a sine wave spline',
+      snap: emptySnap,
+      check: (s) => s.op === 'SKETCH' && s.motif === 'wave' && s.asCubicSpline === true,
+    },
+    {
+      text: 'create a bullet list called Goals with Design, Build, and Ship',
+      snap: emptySnap,
+      check: (s) =>
+        s.op === 'RICH_CARD' &&
+        s.cardKind === 'bullet' &&
+        s.title === 'Goals' &&
+        s.items.length === 3,
+    },
+    {
+      text: 'create a code card saying const ready = true',
+      snap: emptySnap,
+      check: (s) => s.op === 'RICH_CARD' && s.cardKind === 'code' && s.items[0].includes('ready'),
+    },
+    {
+      text: 'append Launch live to Moon',
+      snap: populatedSnap,
+      check: (s) => s.op === 'APPEND_TEXT' && s.targets.includes('s1') && s.text === 'Launch live',
+    },
+    {
+      text: 'new page called Architecture',
+      snap: emptySnap,
+      check: (s) => s.op === 'PAGE' && s.action === 'new' && s.name === 'Architecture',
+    },
+    {
+      text: 'next page',
+      snap: emptySnap,
+      check: (s) => s.op === 'PAGE' && s.action === 'next',
+    },
+    {
+      text: 'export SVG',
+      snap: emptySnap,
+      check: (s) => s.op === 'EXPORT' && s.format === 'svg',
+    },
+    {
+      text: 'export selected as PNG',
+      snap: populatedSnap,
+      check: (s) => s.op === 'EXPORT' && s.format === 'png' && s.selectionOnly === true,
+    },
+    {
+      text: 'group everything together',
+      snap: populatedSnap,
+      check: (s) => s.op === 'GROUP',
+    },
+    {
+      text: 'ungroup everything',
+      snap: populatedSnap,
+      check: (s) => s.op === 'UNGROUP',
+    },
+    {
+      text: 'pack shapes tightly',
+      snap: populatedSnap,
+      check: (s) => s.op === 'PACK',
+    },
+    {
+      text: 'stack horizontally',
+      snap: populatedSnap,
+      check: (s) => s.op === 'STACK' && s.direction === 'horizontal',
+    },
+    {
+      text: 'stretch to same width',
+      snap: populatedSnap,
+      check: (s) => s.op === 'STRETCH' && s.direction === 'horizontal',
+    },
+    {
+      text: 'flip horizontally',
+      snap: populatedSnap,
+      check: (s) => s.op === 'FLIP' && s.axis === 'horizontal',
+    },
+    {
+      text: 'show grid and enable snap',
+      snap: emptySnap,
+      check: (s) => s.op === 'GRID' && s.gridMode === true && s.snapMode === true,
+    },
+    {
+      text: 'what can I say',
+      snap: emptySnap,
+      check: (s) => s.op === 'STUDIO_GUIDE',
+    },
+    {
+      text: 'put a yellow sticky note right here',
+      snap: { ...emptySnap, pointerPoint: { x: 240, y: -120 } },
+      check: (s) => s.op === 'SPAWN' && s.anchor === 'pointer' && s.color === 'yellow',
+    },
+    {
+      text: 'draw three circles in a row',
+      snap: emptySnap,
+      check: (s) => s.op === 'SPAWN' && s.count === 3,
+    },
+    {
+      text: 'sketch a Redis cache',
+      snap: emptySnap,
+      check: (s) => s.op === 'SPAWN',
+    },
+  ];
+
+  for (const sc of studioChecks) {
+    const r = await fetch(`${BASE}/api/voice/resolve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: sc.text,
+        words: sc.text.split(/\s+/).map((w) => [w, 0.99]),
+        shapes: sc.snap.shapes,
+      }),
+    });
+    const { resolution } = await r.json();
+    const compiled = compileCompoundSyscalls(null, sc.snap, resolution);
+    assert.ok(
+      sc.check(compiled.syscall),
+      `Failed studio syscall check for "${sc.text}": got ${JSON.stringify(compiled.syscall)} (${compiled.opcodeLine})`,
+    );
+    assert.equal(compiled.needsQwenDisambiguation, false, `Unexpected Qwen stall on "${sc.text}"`);
+  }
+  console.log(`15. All ${studioChecks.length} native tldraw studio syscalls & pointer anchors PASS`);
+
+  // 16. Runtime tldraw@5.6.0 Schema Validation for Freehand Ink, Cubic Splines, and Rich-Text Cards
+  const allMotifs = [
+    'circle_around',
+    'underline',
+    'cross_out',
+    'bracket',
+    'wave',
+    'spiral',
+    'sparkline',
+    'divider',
+    'checkmark',
+    'lightning',
+    'smiley',
+  ];
+  for (const motif of allMotifs) {
+    const { segments } = buildDrawMotifSegments(motif, { cx: 0, cy: 0, w: 240, h: 140 });
+    drawShapeProps.segments.validate(segments);
+  }
+  for (const splineMotif of ['wave', 'sparkline', 'divider']) {
+    const { points } = buildSplineMotifPoints(splineMotif);
+    lineShapeProps.points.validate(points);
+  }
+  const bulletDoc = buildListRichText('Roadmap', ['Design', 'Build', 'Ship'], 'bullet');
+  const orderedDoc = buildListRichText('Steps', ['One', 'Two', 'Three'], 'ordered');
+  const checkDoc = buildListRichText('Launch', ['Tests', 'Deploy'], 'checklist');
+  const codeDoc = buildCodeRichText('Worker', ['const ok = true;', 'return ok;']);
+  const appendedDoc = appendToRichText(bulletDoc, 'Verify live', true);
+  for (const doc of [bulletDoc, orderedDoc, checkDoc, codeDoc, appendedDoc]) {
+    geoShapeProps.richText.validate(doc);
+  }
+  assert.equal(extractHeadlineText(bulletDoc), 'Roadmap');
+  console.log('16. tldraw@5.6.0 strict store validators (drawShapeProps, lineShapeProps, geoShapeProps.richText) PASS');
+
+  // 17. Multi-Clause Studio Deck Workflow ("new page called Spec, draw a sequence diagram, and export SVG")
+  const deckWorkflow = 'new page called Spec, draw a sequence diagram, and export SVG';
+  const deckRes = await fetch(`${BASE}/api/voice/resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: deckWorkflow,
+      words: deckWorkflow.split(/\s+/).map((w) => [w, 0.99]),
+      shapes: [],
+    }),
+  });
+  const { resolution: deckSem } = await deckRes.json();
+  const deckPlan = compileCompoundSyscalls(null, emptySnap, deckSem);
+  assert.deepEqual(
+    deckPlan.syscalls.map((s) => s.op),
+    ['PAGE', 'LAYOUT', 'EXPORT'],
+  );
+  assert.equal(deckPlan.syscalls[0].name, 'Spec');
+  assert.equal(deckPlan.syscalls[1].kind, 'sequence');
+  assert.equal(deckPlan.syscalls[2].format, 'svg');
+  console.log('17. Multi-clause studio workflow (PAGE -> LAYOUT -> EXPORT) PASS:', deckPlan.opcodeLine);
+
+  // 18. Zero-Button Architectural Invariant & 120-Prototype Vector Bank Verification
+  const catRes = await fetch(`${BASE}/api/voice/catalog`);
+  assert.equal(catRes.status, 200);
+  const catJson = await catRes.json();
+  assert.equal(catJson.manifestEntries, 120, `Expected 120 Gemma vector prototypes, got ${catJson.manifestEntries}`);
+
+  const appSource = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const distHtml = fs.readFileSync(new URL('../dist/index.html', import.meta.url), 'utf8');
+  assert.equal(/<button\b/i.test(appSource), false, 'Expected ZERO <button> elements in src/App.tsx');
+  assert.equal(/<button\b/i.test(distHtml), false, 'Expected ZERO <button> elements in dist/index.html');
+  assert.ok(appSource.includes('persistenceKey="caval-studio-v1"'), 'Expected IndexedDB persistenceKey enabled');
+  console.log('18. Zero-UI-button invariant + 120-prototype vector bank + IndexedDB persistence check PASS');
+
+  console.log('\nALL 18 E2E STUDIO + TLDRAW CREATIVE POWER + SPEED TESTS PASSED 100%!');
+} catch (err) {
+  console.error('\nE2E TEST FAILURE:', err);
+  exitCode = 1;
 } finally {
   serverProc.kill();
+  process.exit(exitCode);
 }

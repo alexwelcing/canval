@@ -98,6 +98,17 @@ export class CanvasAnimationEngine {
     this.ensureLoop();
   }
 
+  /**
+   * Re-synchronizes active kinetic tracks when switching between multi-page canvases,
+   * preserving `meta.anim` on inactive pages while waking tracks on the current page.
+   */
+  public syncCurrentPage(): void {
+    this.tracks.clear();
+    this.restoreFromMeta();
+    this.notifyCount();
+    this.ensureLoop();
+  }
+
   public detach(): void {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
@@ -342,9 +353,10 @@ export class CanvasAnimationEngine {
     const editor = this.editor;
     if (!editor || this.tracks.size === 0) return;
 
-    // Respect active pointer dragging: skip mutating currently dragged selected shapes mid-gesture
+    // Respect active pointer dragging & inline text editing: never fight user touch or typing cursor!
     const isDragging = editor.inputs.isDragging;
     const selectedSet = isDragging ? new Set(editor.getSelectedShapeIds()) : null;
+    const editingId = editor.getEditingShapeId();
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updates: any[] = [];
@@ -358,8 +370,8 @@ export class CanvasAnimationEngine {
         continue;
       }
 
-      if (selectedSet?.has(id)) {
-        // Track user's finger drag in real time so releasing continues smoothly from new position
+      if (selectedSet?.has(id) || editingId === id) {
+        // Track user's finger drag / inline edit so releasing continues smoothly from new position
         const dims = getShapeDimensions(editor, shape);
         const c = centerFromTopLeftAndRotation(shape.x, shape.y, dims.w, dims.h, shape.rotation || 0);
         tr.centerX = c.cx;

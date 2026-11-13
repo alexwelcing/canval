@@ -19,6 +19,7 @@ import type {
   EarlybirdTranscriptUpdate,
   EarlybirdWorkerIn,
   EarlybirdWorkerOut,
+  ExportFormat,
   GemmaWorkerIn,
   GemmaWorkerOut,
   SemanticResolution,
@@ -32,13 +33,51 @@ declare global {
     __tldrawEditor?: Editor;
     voiceCanvasSpeak?: (utterance: string) => Promise<DirectorResult | null>;
     voiceCanvasHarmonize?: (goalPrompt?: string) => Promise<DirectorResult | null>;
+    voiceCanvasExport?: (
+      format?: ExportFormat,
+      selectionOnly?: boolean,
+    ) => Promise<{ ok: boolean; format: ExportFormat; bytes: number; width?: number; height?: number }>;
   }
 }
 
 type MicUiState = 'idle' | 'requesting' | 'live' | 'suspended' | 'denied';
 
+const EDITION_STORAGE_KEY = 'caval-edition-v1';
 const VU_BAR_COUNT = 12;
 const IDLE_VU_BARS = Array.from({ length: VU_BAR_COUNT }, () => 14);
+
+const CURATORIAL_WHISPERS = [
+  'Listening — "Draw a sequence diagram" · "Bullet list with Design, Build, Ship"',
+  'Listening — "Pen mode" to sketch freehand · "Circle around API Gateway"',
+  'Listening — "New page called Wireframe" · "Kyoto Washi" · "Export PNG"',
+  'Listening — "Solar system" · "Harmonize the canvas" · or say "What can I say"',
+];
+
+const TOOL_BADGE_LABELS: Record<string, string> = {
+  draw: 'PEN',
+  highlight: 'MARKER',
+  laser: 'LASER',
+  eraser: 'ERASER',
+  hand: 'HAND',
+  arrow: 'ARROW',
+  line: 'SPLINE',
+  note: 'NOTE',
+  text: 'TYPE',
+  frame: 'FRAME',
+};
+
+function loadInitialEdition(): AestheticEdition {
+  try {
+    const saved = window.localStorage.getItem(EDITION_STORAGE_KEY);
+    if (saved) {
+      const found = AESTHETIC_EDITIONS.find((e) => e.id === saved);
+      if (found) return found;
+    }
+  } catch {
+    // ignore storage access issues
+  }
+  return AESTHETIC_EDITIONS[0];
+}
 
 function detectMobileConstrainedDevice(): boolean {
   if (typeof navigator === 'undefined') return false;
@@ -57,7 +96,7 @@ function computePerceptualBarPct(peakLevel: number): number {
 }
 
 export function App() {
-  const [edition, setEdition] = useState<AestheticEdition>(AESTHETIC_EDITIONS[0]);
+  const [edition, setEdition] = useState<AestheticEdition>(loadInitialEdition);
   const [roomEntered, setRoomEntered] = useState(false);
   const [micState, setMicState] = useState<MicUiState>('idle');
   const [activationStampSeq, setActivationStampSeq] = useState(0);
@@ -79,6 +118,13 @@ export function App() {
   const [airBuffer, setAirBuffer] = useState<string>('');
   const [lastInscription, setLastInscription] = useState<string>('');
   const [activeAnims, setActiveAnims] = useState<number>(0);
+  const [activeTool, setActiveTool] = useState<string>('select');
+  const [pageInfo, setPageInfo] = useState<{ index: number; total: number; name: string }>({
+    index: 1,
+    total: 1,
+    name: 'Page 1',
+  });
+  const [whisperIdx, setWhisperIdx] = useState(0);
   const [rmsLevel, setRmsLevel] = useState(0);
 
   const editorRef = useRef<Editor | null>(null);
@@ -407,13 +453,160 @@ export function App() {
   );
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(EDITION_STORAGE_KEY, edition.id);
+    } catch {
+      // ignore storage write issues
+    }
+  }, [edition.id]);
+
+  useEffect(() => {
+    if (micState !== 'live' || !modelsReady || Boolean(lastInscription)) return;
+    const timer = window.setInterval(() => {
+      setWhisperIdx((i) => (i + 1) % CURATORIAL_WHISPERS.length);
+    }, 7200);
+    return () => window.clearInterval(timer);
+  }, [lastInscription, micState, modelsReady]);
+
+  const syncEditorTelemetry = useCallback((editor: Editor) => {
+    const toolId = editor.getCurrentToolId();
+    setActiveTool((prev) => (prev === toolId ? prev : toolId));
+    const pages = editor.getPages();
+    const cur = editor.getCurrentPage();
+    const idx = Math.max(0, pages.findIndex((p) => p.id === cur.id)) + 1;
+    setPageInfo((prev) =>
+      prev.index === idx && prev.total === pages.length && prev.name === cur.name
+        ? prev
+        : { index: idx, total: pages.length, name: cur.name },
+    );
+  }, []);
+
+  const triggerDownloadBlob = useCallback((blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }, []);
+
+  const triggerCanvasExport = useCallback(
+    async (
+      format: ExportFormat = 'png',
+      selectionOnly = false,
+    ): Promise<{ ok: boolean; format: ExportFormat; bytes: number; width?: number; height?: number }> => {
+      const editor = editorRef.current;
+      if (!editor) return { ok: false, format, bytes: 0 };
+
+      const pageSlug =
+        editor
+          .getCurrentPage()
+          .name.toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || 'study';
+
+      if (format === 'json') {
+        const payload = JSON.stringify(
+          {
+            studio: 'cavals',
+            exportedAt: new Date().toISOString(),
+            editionId: editionRef.current.id,
+            snapshot: editor.getSnapshot(),
+          },
+          null,
+          2,
+        );
+        const blob = new Blob([payload], { type: 'application/json' });
+        triggerDownloadBlob(blob, `cavals-${pageSlug}.tldr.json`);
+        setLastInscription(`Exported JSON archive (${Math.max(1, Math.round(blob.size / 1024))} KB)`);
+        return { ok: true, format, bytes: blob.size };
+      }
+
+      const selectedIds = [...editor.getSelectedShapeIds()];
+      const shapeIds =
+        selectionOnly && selectedIds.length > 0
+          ? selectedIds
+          : [...editor.getCurrentPageShapeIds()].filter((id) => {
+              const s = editor.getShape(id);
+              return Boolean(s && !s.meta?.speculative);
+            });
+
+      if (shapeIds.length === 0) {
+        setLastInscription('Canvas is blank — speak forms into being before exporting');
+        return { ok: false, format, bytes: 0 };
+      }
+
+      try {
+        const imgFormat = format === 'svg' ? 'svg' : 'png';
+        const rendered = await editor.toImage(shapeIds, {
+          format: imgFormat,
+          background: true,
+          scale: 1,
+          pixelRatio: 2,
+          padding: 32,
+        });
+
+        if (format === 'copy') {
+          if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+            try {
+              await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': rendered.blob }),
+              ]);
+              setLastInscription(`Copied PNG (${rendered.width}×${rendered.height}) to clipboard`);
+              return {
+                ok: true,
+                format,
+                bytes: rendered.blob.size,
+                width: rendered.width,
+                height: rendered.height,
+              };
+            } catch {
+              // Fall back to direct file download if browser blocks async clipboard write
+            }
+          }
+          triggerDownloadBlob(rendered.blob, `cavals-${pageSlug}.png`);
+          setLastInscription(`Saved PNG (${rendered.width}×${rendered.height})`);
+          return {
+            ok: true,
+            format,
+            bytes: rendered.blob.size,
+            width: rendered.width,
+            height: rendered.height,
+          };
+        }
+
+        triggerDownloadBlob(rendered.blob, `cavals-${pageSlug}.${imgFormat}`);
+        setLastInscription(
+          `Exported ${imgFormat.toUpperCase()} (${rendered.width}×${rendered.height})`,
+        );
+        return {
+          ok: true,
+          format,
+          bytes: rendered.blob.size,
+          width: rendered.width,
+          height: rendered.height,
+        };
+      } catch {
+        setLastInscription('Export unavailable on empty bounds');
+        return { ok: false, format, bytes: 0 };
+      }
+    },
+    [triggerDownloadBlob],
+  );
+
+  useEffect(() => {
     window.voiceCanvasSpeak = speakProgrammatically;
     window.voiceCanvasHarmonize = triggerVisionHarmonize;
+    window.voiceCanvasExport = triggerCanvasExport;
     return () => {
       delete window.voiceCanvasSpeak;
       delete window.voiceCanvasHarmonize;
+      delete window.voiceCanvasExport;
     };
-  }, [speakProgrammatically, triggerVisionHarmonize]);
+  }, [speakProgrammatically, triggerCanvasExport, triggerVisionHarmonize]);
 
   // Zero-button Air-Keyboard: type directly in quiet environments & press Enter to speak
   useEffect(() => {
@@ -430,7 +623,14 @@ export function App() {
       }
 
       if (ev.key === 'Escape') {
-        setAirBuffer('');
+        setAirBuffer((prev) => {
+          if (!prev && editorRef.current && editorRef.current.getCurrentToolId() !== 'select') {
+            editorRef.current.setCurrentTool('select');
+            setActiveTool('select');
+            setLastInscription('Pointer select');
+          }
+          return '';
+        });
         return;
       }
       if (ev.key === 'Backspace') {
@@ -486,12 +686,27 @@ export function App() {
           editionRef.current,
           (nextEd) => setEdition(nextEd),
         );
+        syncEditorTelemetry(editor);
+
         if (result?.requestHarmonizeGoal) {
           void triggerVisionHarmonize(result.requestHarmonizeGoal).then((hRes) => {
             const pending = pendingSpeakResolversRef.current.get(msg.payload.requestId);
             if (pending) {
               pendingSpeakResolversRef.current.delete(msg.payload.requestId);
               pending(hRes);
+            }
+          });
+          return;
+        }
+        if (result?.requestExport) {
+          void triggerCanvasExport(
+            result.requestExport.format,
+            Boolean(result.requestExport.selectionOnly),
+          ).then(() => {
+            const pending = pendingSpeakResolversRef.current.get(msg.payload.requestId);
+            if (pending) {
+              pendingSpeakResolversRef.current.delete(msg.payload.requestId);
+              pending(result);
             }
           });
           return;
@@ -647,7 +862,9 @@ export function App() {
     handleResolvedSemantics,
     handleTranscriptUpdate,
     pushVuLevel,
+    syncEditorTelemetry,
     syncShapesToGemma,
+    triggerCanvasExport,
     triggerVisionHarmonize,
   ]);
 
@@ -730,6 +947,9 @@ export function App() {
   // Any trusted tap/click on the canvas automatically arms or resumes a paused/unarmed microphone
   useEffect(() => {
     const onUserGesture = () => {
+      if (editorRef.current) {
+        syncEditorTelemetry(editorRef.current);
+      }
       if (micSessionRef.current?.isAlive()) {
         void micSessionRef.current.resumeIfNeeded();
         return;
@@ -751,7 +971,7 @@ export function App() {
       window.removeEventListener('touchend', onUserGesture, { capture: true });
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [activateMicrophone]);
+  }, [activateMicrophone, syncEditorTelemetry]);
 
   const handleCanvasMount = useCallback(
     (editor: Editor) => {
@@ -761,28 +981,62 @@ export function App() {
         colorScheme: editionRef.current.isDarkCanvas ? 'dark' : 'light',
       });
 
+      // Clean up any leftover speculative ghost previews from an interrupted session
+      const staleSpecs = editor.store
+        .allRecords()
+        .filter(
+          (r) =>
+            r.typeName === 'shape' &&
+            Boolean((r as unknown as { meta?: { speculative?: boolean } }).meta?.speculative),
+        )
+        .map((r) => r.id);
+      if (staleSpecs.length > 0) {
+        editor.store.mergeRemoteChanges(() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          editor.deleteShapes(staleSpecs as any);
+        });
+      }
+
+      syncEditorTelemetry(editor);
+      syncShapesToGemma();
+
       directorRef.current.animations.attach(editor, (count) => {
         setActiveAnims(count);
       });
 
       let debounceId: number | null = null;
-      const disposeListener = editor.store.listen(
+      const disposeDocListener = editor.store.listen(
         () => {
           if (debounceId) window.clearTimeout(debounceId);
           debounceId = window.setTimeout(() => {
             directorRef.current.animations.pruneDeletedShapes();
+            syncEditorTelemetry(editor);
             syncShapesToGemma();
           }, 180);
         },
         { source: 'user', scope: 'document' },
       );
 
+      let rafTelemetry = 0;
+      const disposeSessionListener = editor.store.listen(
+        () => {
+          if (rafTelemetry) return;
+          rafTelemetry = window.requestAnimationFrame(() => {
+            rafTelemetry = 0;
+            syncEditorTelemetry(editor);
+          });
+        },
+        { scope: 'session' },
+      );
+
       return () => {
-        disposeListener();
+        if (rafTelemetry) window.cancelAnimationFrame(rafTelemetry);
+        disposeDocListener();
+        disposeSessionListener();
         directorRef.current.animations.detach();
       };
     },
-    [syncShapesToGemma],
+    [syncEditorTelemetry, syncShapesToGemma],
   );
 
   const frameVars = useMemo(
@@ -835,6 +1089,8 @@ export function App() {
             ? 'MIC BLOCKED · TOUCH TO RETRY'
             : 'MIC OFF · TOUCH CANVAS TO START';
 
+  const activeToolBadge = activeTool !== 'select' ? TOOL_BADGE_LABELS[activeTool] ?? activeTool.toUpperCase() : null;
+
   return (
     <div className="gallery-room" style={frameVars}>
       <div className="art-frame-moulding">
@@ -884,7 +1140,7 @@ export function App() {
               </div>
             )}
 
-            <Tldraw hideUi onMount={handleCanvasMount} />
+            <Tldraw hideUi persistenceKey="caval-studio-v1" onMount={handleCanvasMount} />
 
             {!roomEntered && (
               <div
@@ -899,7 +1155,7 @@ export function App() {
                 </div>
                 <h1 className="opening-serif-heading">The Spoken Canvas</h1>
                 <p className="opening-serif-sub">
-                  No instruments. No menus. Speak forms, motion, and aesthetics into being.
+                  No instruments. No menus. Speak forms, ink, motion, and aesthetics into being.
                 </p>
                 <div className="opening-hairline" />
                 <div className="opening-instruction">
@@ -961,14 +1217,16 @@ export function App() {
               ) : lastInscription ? (
                 <span className="mat-whisper">{lastInscription}</span>
               ) : (
-                <span className="mat-whisper">
-                  Listening — speak a form, movement, animation, or harmonize
-                </span>
+                <span className="mat-whisper">{CURATORIAL_WHISPERS[whisperIdx]}</span>
               )}
             </div>
 
             <div className="mat-edition-plate">
+              {activeToolBadge && <span className="mat-tool-tag">{activeToolBadge}</span>}
               <span>
+                {pageInfo.total > 1
+                  ? `P.${String(pageInfo.index).padStart(2, '0')}/${String(pageInfo.total).padStart(2, '0')} · `
+                  : ''}
                 {activeAnims > 0 ? `${activeAnims} KINETIC · ` : ''}
                 {edition.catalogueNumber} · {edition.title}
               </span>

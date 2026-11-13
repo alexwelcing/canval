@@ -88,6 +88,9 @@ const SHAPE_SYNONYMS: Record<string, string[]> = {
   note: ['note', 'sticky', 'memo', 'post-it', 'post it'],
   text: ['text', 'title', 'heading', 'label', 'caption'],
   frame: ['frame', 'artboard'],
+  draw: ['sketch', 'wave', 'spiral', 'stroke', 'ink', 'underline', 'checkmark'],
+  line: ['line', 'spline', 'divider', 'curve'],
+  group: ['group', 'cluster'],
 };
 
 const VALID_BLUEPRINTS = new Set<BlueprintKind>([
@@ -108,6 +111,10 @@ const VALID_BLUEPRINTS = new Set<BlueprintKind>([
   'state_machine',
   'layers',
   'comparison',
+  'sequence',
+  'table',
+  'journey',
+  'er_schema',
   'row',
   'column',
 ]);
@@ -291,6 +298,268 @@ export function compileVerifiedSyscall(
 
   // In a multi-clause sentence, rely on each sub-clause's lexical intent first so clauses don't bleed into one another!
   const effectiveIntent = slots.lexicalIntent ?? (isSubClause ? 'create_shape' : res.intentKind);
+
+  // STUDIO GUIDE ("what can I say", "show voice commands", "studio guide")
+  if (
+    head === 'GUIDE' ||
+    slots.studioGuide ||
+    (effectiveIntent === 'studio_guide' &&
+      /\b(help|guide|commands?|what\s+can|examples?|how\s+do\s+i)\b/i.test(clauseText))
+  ) {
+    return {
+      opcodeLine: 'STUDIO_GUIDE',
+      syscall: { op: 'STUDIO_GUIDE' },
+    };
+  }
+
+  // EXPORT CANVAS (PNG, SVG, Clipboard, JSON)
+  if (
+    head === 'EXPORT' ||
+    slots.exportFormat !== null ||
+    (effectiveIntent === 'export_canvas' &&
+      /\b(export|download|save|snapshot|screenshot|copy\s+(?:image|canvas|diagram))\b/i.test(
+        clauseText,
+      ))
+  ) {
+    const fmt = slots.exportFormat ?? 'png';
+    return {
+      opcodeLine: `EXPORT ${fmt}${slots.exportSelectionOnly ? ' (selected)' : ''}`,
+      syscall: {
+        op: 'EXPORT',
+        format: fmt,
+        selectionOnly: slots.exportSelectionOnly,
+      },
+    };
+  }
+
+  // MULTI-PAGE MANAGEMENT ("new page called Wireframe", "next page", "duplicate page")
+  if (
+    head === 'PAGE' ||
+    slots.pageAction !== null ||
+    (effectiveIntent === 'manage_page' && /\b(page|slide)\b/i.test(clauseText))
+  ) {
+    const action = slots.pageAction ?? 'new';
+    return {
+      opcodeLine: `PAGE ${action}${slots.pageName ? ` "${slots.pageName}"` : slots.pageNumber ? ` #${slots.pageNumber}` : ''}`,
+      syscall: {
+        op: 'PAGE',
+        action,
+        name: slots.pageName,
+        pageNumber: slots.pageNumber,
+      },
+    };
+  }
+
+  // NATIVE TLDRAW TOOL SWITCHING ("pen mode", "red highlighter", "laser pointer", "select mode")
+  if (
+    head === 'TOOL' ||
+    slots.toolSwitch !== null ||
+    (effectiveIntent === 'switch_tool' &&
+      /\b(tool|mode|pen|marker|highlighter|laser|eraser|pointer|hand)\b/i.test(clauseText))
+  ) {
+    const tool = slots.toolSwitch ?? 'draw';
+    return {
+      opcodeLine: `TOOL ${tool}${slots.explicitColor ? ` (${slots.explicitColor})` : ''}`,
+      syscall: {
+        op: 'TOOL',
+        tool,
+        color: slots.explicitColor,
+        size: slots.sizeOverride,
+        dash: slots.dashOverride,
+      },
+    };
+  }
+
+  // ARCHITECTURAL GRID & MAGNETIC SNAP
+  if (
+    head === 'GRID' ||
+    slots.gridMode !== null ||
+    slots.snapMode !== null ||
+    (effectiveIntent === 'toggle_grid_snap' && /\b(grid|snap|snapping)\b/i.test(clauseText))
+  ) {
+    const fallbackGrid =
+      slots.gridMode === null && slots.snapMode === null
+        ? !/\b(hide|off|disable)\b/i.test(clauseText)
+        : slots.gridMode;
+    return {
+      opcodeLine: `GRID grid=${fallbackGrid ?? 'keep'} snap=${slots.snapMode ?? 'keep'}`,
+      syscall: {
+        op: 'GRID',
+        gridMode: fallbackGrid,
+        snapMode: slots.snapMode,
+      },
+    };
+  }
+
+  // APPEND BULLET / LINE TO EXISTING RICH-TEXT SHAPE
+  if (
+    head === 'APPEND' ||
+    slots.appendText !== null ||
+    (effectiveIntent === 'append_text' && /\b(append|add\s+(?:bullet|item|line))\b/i.test(clauseText))
+  ) {
+    const targets = slots.appendTargetHint
+      ? resolveRegisterTargets(slots.appendTargetHint, snapshot, res, parts[1])
+      : snapshot.focusRegs.length > 0
+        ? snapshot.focusRegs
+        : resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    return {
+      opcodeLine: `APPEND ${targets.join(',') || 'FOCUS'} "${slots.appendText ?? ''}"`,
+      syscall: {
+        op: 'APPEND_TEXT',
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        targetLabelHint: slots.appendTargetHint,
+        text: slots.appendText ?? slots.singleLabel ?? 'New item',
+        asBullet: !/\bline\b/i.test(clauseText),
+      },
+    };
+  }
+
+  // RICH-TEXT STRUCTURED CARDS (bullet lists, numbered lists, checklists, code cards)
+  if (
+    head === 'RICHCARD' ||
+    slots.richCardKind !== null ||
+    (effectiveIntent === 'rich_text_card' &&
+      /\b(list|checklist|todo|code\s+(?:card|block|snippet))\b/i.test(clauseText))
+  ) {
+    const cardKind = slots.richCardKind ?? 'bullet';
+    const items =
+      cardKind === 'code'
+        ? slots.codeSnippet
+          ? [slots.codeSnippet]
+          : slots.listLabels.length > 0
+            ? slots.listLabels
+            : ['export async function handler(req) {', '  return Response.json({ ok: true })', '}']
+        : slots.listLabels.length > 0
+          ? slots.listLabels
+          : ['First priority', 'Second milestone', 'Final review'];
+    const shapeKind = /\b(note|sticky)\b/i.test(clauseText) ? 'note' : 'card';
+    return {
+      opcodeLine: `RICH_CARD ${cardKind} (${items.length} items)`,
+      syscall: {
+        op: 'RICH_CARD',
+        cardKind,
+        title: slots.singleLabel ?? slots.topic,
+        items,
+        shapeKind,
+        anchor: slots.anchor,
+        color: slots.explicitColor ?? (isSubClause ? null : res.color),
+      },
+    };
+  }
+
+  // FREEHAND INK SKETCH & CUBIC SPLINE ILLUSTRATIONS / ANNOTATIONS
+  if (
+    head === 'SKETCH' ||
+    slots.sketchMotif !== null ||
+    (effectiveIntent === 'sketch_ink' &&
+      /\b(scribble|squiggle|doodle|ink\s+stroke|freehand\s+line)\b/i.test(clauseText))
+  ) {
+    const motif = slots.sketchMotif ?? 'wave';
+    const isAnnotationMotif =
+      motif === 'circle_around' ||
+      motif === 'underline' ||
+      motif === 'cross_out' ||
+      motif === 'bracket';
+    const targets = slots.sketchTargetHint
+      ? resolveRegisterTargets(slots.sketchTargetHint, snapshot, res, parts[1])
+      : isAnnotationMotif && snapshot.focusRegs.length > 0
+        ? snapshot.focusRegs
+        : [];
+    return {
+      opcodeLine: `SKETCH ${motif}${targets.length ? ` @${targets.join(',')}` : ''}`,
+      syscall: {
+        op: 'SKETCH',
+        motif,
+        targets,
+        targetLabelHint: slots.sketchTargetHint,
+        anchor: slots.anchor,
+        color: slots.explicitColor ?? (isSubClause ? null : res.color),
+        size: slots.sizeOverride,
+        asCubicSpline: slots.sketchAsSpline,
+      },
+    };
+  }
+
+  // NATIVE TLDRAW GROUP / UNGROUP
+  if (
+    head === 'GROUP' ||
+    head === 'UNGROUP' ||
+    slots.groupAction !== null ||
+    (effectiveIntent === 'group_ungroup' && /\b(group|ungroup)\b/i.test(clauseText))
+  ) {
+    const isUngroup =
+      head === 'UNGROUP' || slots.groupAction === 'ungroup' || /\bungroup\b/i.test(clauseText);
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    if (isUngroup) {
+      return {
+        opcodeLine: `UNGROUP ${targets.join(',') || 'ALL'}`,
+        syscall: { op: 'UNGROUP', targets: targets.length > 0 ? targets : ['ALL'] },
+      };
+    }
+    return {
+      opcodeLine: `GROUP ${targets.length >= 2 ? targets.join(',') : 'ALL'}`,
+      syscall: { op: 'GROUP', targets: targets.length >= 2 ? targets : ['ALL'] },
+    };
+  }
+
+  // NATIVE TLDRAW PACK, STACK & STRETCH
+  if (
+    head === 'PACK' ||
+    head === 'STACK' ||
+    head === 'STRETCH' ||
+    slots.packShapes ||
+    slots.stackDirection !== null ||
+    slots.stretchDirection !== null ||
+    (effectiveIntent === 'layout_pack_stack' &&
+      /\b(pack|stack|stretch|same\s+(?:width|height|size)|match\s+(?:width|height|size))\b/i.test(
+        clauseText,
+      ))
+  ) {
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    const multiTargets = targets.length >= 2 ? targets : ['ALL'];
+    if (
+      head === 'PACK' ||
+      slots.packShapes ||
+      (!slots.stackDirection && !slots.stretchDirection && /\bpack\b/i.test(clauseText))
+    ) {
+      return {
+        opcodeLine: `PACK ${multiTargets.join(',')}`,
+        syscall: { op: 'PACK', targets: multiTargets },
+      };
+    }
+    if (head === 'STRETCH' || slots.stretchDirection !== null) {
+      const dir = slots.stretchDirection ?? 'horizontal';
+      return {
+        opcodeLine: `STRETCH ${dir}`,
+        syscall: { op: 'STRETCH', targets: multiTargets, direction: dir },
+      };
+    }
+    const stackDir =
+      slots.stackDirection ?? (/\bhorizontal/i.test(clauseText) ? 'horizontal' : 'vertical');
+    return {
+      opcodeLine: `STACK ${stackDir}`,
+      syscall: { op: 'STACK', targets: multiTargets, direction: stackDir },
+    };
+  }
+
+  // NATIVE TLDRAW FLIP / MIRROR
+  if (
+    head === 'FLIP' ||
+    slots.flipAxis !== null ||
+    (effectiveIntent === 'transform_flip' && /\b(flip|mirror)\b/i.test(clauseText))
+  ) {
+    const targets = resolveRegisterTargets(clauseText, snapshot, res, parts[1]);
+    const axis =
+      slots.flipAxis ?? (/\bvertical/i.test(clauseText) ? 'vertical' : 'horizontal');
+    return {
+      opcodeLine: `FLIP ${targets.join(',') || 'FOCUS'} ${axis}`,
+      syscall: {
+        op: 'FLIP',
+        targets: targets.length > 0 ? targets : ['FOCUS'],
+        axis,
+      },
+    };
+  }
 
   // STOP animation
   if (head === 'STOP' || effectiveIntent === 'stop_animation' || slots.animationKind === 'stop') {
@@ -873,10 +1142,11 @@ export function compileCompoundSyscalls(
     // e.g. "draw five yellow stars floating" or "add a red diamond spinning"
     const syscalls: CanvasSyscall[] = [single.syscall];
     if (
-      (single.syscall.op === 'SPAWN' || single.syscall.op === 'LAYOUT') &&
+      (single.syscall.op === 'SPAWN' ||
+        single.syscall.op === 'RICH_CARD' ||
+        single.syscall.op === 'SKETCH') &&
       slots.animationKind &&
-      slots.animationKind !== 'stop' &&
-      single.syscall.op !== 'LAYOUT'
+      slots.animationKind !== 'stop'
     ) {
       syscalls.push({
         op: 'ANIM',

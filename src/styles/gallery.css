@@ -473,6 +473,14 @@ body,
   color: var(--placard-muted);
 }
 
+.mat-tool-tag {
+  padding: 1px 5px;
+  border: 1px solid var(--accent-tick);
+  color: var(--placard-ink);
+  font-weight: 600;
+  letter-spacing: 0.11em;
+}
+
 @media (min-width: 768px) {
   .gallery-room {
     padding: 16px;

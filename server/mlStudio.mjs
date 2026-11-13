@@ -425,7 +425,7 @@ export class StudioMLKernel {
 
   async ideateTopicNodes({ topic = '', blueprintId = 'mindmap', count = 4 }) {
     const cleanTopic = String(topic || '').trim().slice(0, 64);
-    const clampedCount = Math.min(7, Math.max(2, Number(count) || 4));
+    const clampedCount = Math.min(12, Math.max(2, Number(count) || 4));
     if (!cleanTopic) {
       return { ok: false, topic: '', labels: [], latencyMs: 0 };
     }
