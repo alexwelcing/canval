@@ -4,6 +4,7 @@ import io
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 import numpy as np
@@ -12,6 +13,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from earlybird import Earlybird
+
 
 def emit(payload: dict):
     sys.stdout.write(json.dumps(payload) + "\n")
@@ -22,46 +24,22 @@ class MLBridgeServer:
     def __init__(self, catalog: dict):
         self.catalog = catalog
         self.sessions = {}
-        self.shape_emb_cache = {}  # text -> np.ndarray (768,)
-
-        t0 = time.perf_counter()
-        self.eb = Earlybird.from_pretrained("sahilmahendrakar/Earlybird-29M", threads=2)
-        self.eb_load_ms = round((time.perf_counter() - t0) * 1000, 1)
-
-        t1 = time.perf_counter()
-        from sentence_transformers import SentenceTransformer
-
+        self.shape_emb_cache = {}
+        self.gemma = None
+        self.gemma_ready = False
+        self.gemma_load_ms = 0.0
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.dtype = (
             torch.bfloat16
             if (torch.cuda.is_available() and torch.cuda.is_bf16_supported())
             else torch.float32
         )
-        self.gemma = SentenceTransformer(
-            "google/embeddinggemma-2",
-            device=self.device,
-            model_kwargs={"torch_dtype": self.dtype},
-            config_kwargs={"audio_config": None},
-        )
-        self.gemma_load_ms = round((time.perf_counter() - t1) * 1000, 1)
 
-        # Precompute corpus embeddings for intents, themes, layouts, archetypes, and visual critiques
-        self.intent_ids, self.intent_mat = self._encode_corpus(
-            catalog.get("intents", []),
-            lambda x: f"title: {x['title']} | text: {x['description']} Examples: {'; '.join(x.get('exemplars', []))}",
-        )
-        self.theme_ids, self.theme_mat = self._encode_corpus(
-            catalog.get("themes", []),
-            lambda x: f"title: {x['title']} | text: {x['description']}",
-        )
-        self.layout_ids, self.layout_mat = self._encode_corpus(
-            catalog.get("layouts", []),
-            lambda x: f"title: {x['title']} | text: {x['description']}",
-        )
-        self.arch_ids, self.arch_mat = self._encode_corpus(
-            catalog.get("archetypes", []),
-            lambda x: f"title: {x['title']} | text: {x['description']}",
-        )
+        self.intent_ids, self.intent_mat = [], np.zeros((0, 768), dtype=np.float32)
+        self.theme_ids, self.theme_mat = [], np.zeros((0, 768), dtype=np.float32)
+        self.layout_ids, self.layout_mat = [], np.zeros((0, 768), dtype=np.float32)
+        self.arch_ids, self.arch_mat = [], np.zeros((0, 768), dtype=np.float32)
+        self.critique_ids, self.critique_mat = [], np.zeros((0, 768), dtype=np.float32)
 
         self.critique_specs = [
             {
@@ -85,17 +63,71 @@ class MLBridgeServer:
                 "description": "Minimalist open canvas with a few focal elements suited for bold typography and framed structure.",
             },
         ]
-        self.critique_ids, self.critique_mat = self._encode_corpus(
-            self.critique_specs,
-            lambda x: f"title: {x['title']} | text: {x['description']}",
-        )
 
-    def _encode_corpus(self, items: list, fmt_fn):
+        t0 = time.perf_counter()
+        self.eb = Earlybird.from_pretrained(
+            os.environ.get("EARLYBIRD_MODEL", "sahilmahendrakar/Earlybird-29M"),
+            threads=int(os.environ.get("EB_THREADS", "2")),
+        )
+        self.eb_load_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+        # Load EmbeddingGemma 2 synchronously if on GPU or requested, or in background thread on CPU
+        load_gemma_env = os.environ.get("LOAD_EMBEDDING_GEMMA", "auto")
+        if load_gemma_env == "sync" or (load_gemma_env == "auto" and self.device == "cuda"):
+            self._load_gemma()
+        elif load_gemma_env != "0":
+            threading.Thread(target=self._load_gemma, daemon=True).start()
+
+    def _load_gemma(self):
+        try:
+            t1 = time.perf_counter()
+            from sentence_transformers import SentenceTransformer
+
+            text_only = os.environ.get("GEMMA_TEXT_ONLY", "0") == "1"
+            cfg_kwargs = {"vision_config": None, "audio_config": None} if text_only else {"audio_config": None}
+            gemma = SentenceTransformer(
+                os.environ.get("EMBEDDING_GEMMA_MODEL", "google/embeddinggemma-2"),
+                device=self.device,
+                model_kwargs={"torch_dtype": self.dtype},
+                config_kwargs=cfg_kwargs,
+            )
+            self.intent_ids, self.intent_mat = self._encode_corpus(
+                gemma,
+                self.catalog.get("intents", []),
+                lambda x: f"title: {x['title']} | text: {x['description']} Examples: {'; '.join(x.get('exemplars', []))}",
+            )
+            self.theme_ids, self.theme_mat = self._encode_corpus(
+                gemma,
+                self.catalog.get("themes", []),
+                lambda x: f"title: {x['title']} | text: {x['description']}",
+            )
+            self.layout_ids, self.layout_mat = self._encode_corpus(
+                gemma,
+                self.catalog.get("layouts", []),
+                lambda x: f"title: {x['title']} | text: {x['description']}",
+            )
+            self.arch_ids, self.arch_mat = self._encode_corpus(
+                gemma,
+                self.catalog.get("archetypes", []),
+                lambda x: f"title: {x['title']} | text: {x['description']}",
+            )
+            self.critique_ids, self.critique_mat = self._encode_corpus(
+                gemma,
+                self.critique_specs,
+                lambda x: f"title: {x['title']} | text: {x['description']}",
+            )
+            self.gemma = gemma
+            self.gemma_load_ms = round((time.perf_counter() - t1) * 1000, 1)
+            self.gemma_ready = True
+        except Exception:
+            self.gemma_ready = False
+
+    def _encode_corpus(self, gemma_model, items: list, fmt_fn):
         if not items:
             return [], np.zeros((0, 768), dtype=np.float32)
         ids = [it["id"] for it in items]
         docs = [fmt_fn(it) for it in items]
-        vecs = self.gemma.encode(docs, normalize_embeddings=True)
+        vecs = gemma_model.encode(docs, normalize_embeddings=True)
         return ids, np.asarray(vecs, dtype=np.float32)
 
     def _encode_query(self, text: str) -> np.ndarray:
@@ -107,7 +139,7 @@ class MLBridgeServer:
         return np.asarray(vec, dtype=np.float32)
 
     def _get_shape_embeddings(self, shapes: list) -> tuple[list[str], np.ndarray]:
-        if not shapes:
+        if not shapes or not self.gemma_ready:
             return [], np.zeros((0, 768), dtype=np.float32)
         ids = []
         missing_texts = []
@@ -168,6 +200,8 @@ class MLBridgeServer:
         return {"sessionId": session_id, "time": 0, "text": "", "words": [], "guess": []}
 
     def handle_score_utterance(self, params: dict) -> dict:
+        if not self.gemma_ready or self.gemma is None:
+            raise RuntimeError("EmbeddingGemma 2 warming up")
         t0 = time.perf_counter()
         utterance = params.get("utterance", "").strip()
         shapes = params.get("canvasShapes", [])
@@ -236,6 +270,8 @@ class MLBridgeServer:
         return img
 
     def handle_vision_harmonize(self, params: dict) -> dict:
+        if not self.gemma_ready or self.gemma is None:
+            raise RuntimeError("EmbeddingGemma 2 warming up")
         t0 = time.perf_counter()
         img_b64 = params.get("imageBase64")
         shapes = params.get("canvasShapes", [])
@@ -257,14 +293,17 @@ class MLBridgeServer:
             for s in shapes[:12]
         ) or "empty canvas"
 
-        multimodal_input = {
-            "text": f"Canvas visual design snapshot with nodes: {shape_summary}. Target vibe: {goal_prompt} <|image|>",
-            "image": [pil_img],
-        }
-        mm_vec = np.asarray(
-            self.gemma.encode(multimodal_input, normalize_embeddings=True),
-            dtype=np.float32,
-        )
+        if os.environ.get("GEMMA_TEXT_ONLY", "0") == "1":
+            mm_vec = self._encode_query(f"Canvas layout: {shape_summary}. Target aesthetic: {goal_prompt}")
+        else:
+            multimodal_input = {
+                "text": f"Canvas visual design snapshot with nodes: {shape_summary}. Target vibe: {goal_prompt} <|image|>",
+                "image": [pil_img],
+            }
+            mm_vec = np.asarray(
+                self.gemma.encode(multimodal_input, normalize_embeddings=True),
+                dtype=np.float32,
+            )
 
         theme_scores = self._scores_dict(self.theme_ids, self.theme_mat, mm_vec)
         critique_scores = self._scores_dict(self.critique_ids, self.critique_mat, mm_vec)
@@ -280,7 +319,7 @@ class MLBridgeServer:
             "critiqueTitle": critique_obj["title"],
             "critiqueDescription": critique_obj["description"],
             "critiqueScores": critique_scores,
-            "modelUsed": f"google/embeddinggemma-2 Vision+Text ({self.device})",
+            "modelUsed": f"google/embeddinggemma-2 ({self.device})",
             "latencyMs": round((time.perf_counter() - t0) * 1000, 1),
         }
 
@@ -296,6 +335,7 @@ def main():
             "dtype": str(server.dtype).replace("torch.", ""),
             "earlybirdLoadMs": server.eb_load_ms,
             "embeddingGemmaLoadMs": server.gemma_load_ms,
+            "gemmaReady": server.gemma_ready,
         }
     )
 
@@ -325,6 +365,7 @@ def main():
                     "dtype": str(server.dtype).replace("torch.", ""),
                     "earlybird": "sahilmahendrakar/Earlybird-29M",
                     "embeddingGemma": "google/embeddinggemma-2",
+                    "gemmaReady": server.gemma_ready,
                 }
             else:
                 raise ValueError(f"Unknown method: {method}")
